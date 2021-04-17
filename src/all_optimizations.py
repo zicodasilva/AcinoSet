@@ -1,4 +1,5 @@
 from argparse import ArgumentParser
+from typing import Dict, Tuple, Any
 
 # imports from notebooks
 import os
@@ -7,7 +8,6 @@ import numpy as np
 import sympy as sp
 import pandas as pd
 import matplotlib.pyplot as plt
-import pathlib
 from glob import glob
 from time import time
 from scipy.stats import linregress
@@ -18,27 +18,43 @@ from lib.calib import triangulate_points_fisheye, project_points_fisheye
 
 plt.style.use(os.path.join('..', 'configs', 'mplstyle.yaml'))
 
+def get_key(dict_data: Dict, value: Any) -> str:
+    for key, val in dict_data.items():
+         if val == value:
+             return key
 
-def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
+    raise ValueError(f"Could not find key corresponding to value: {value}")
+
+def load_data(filename: str):
+    """Reads data from a pickle file.
+
+    Args:
+        filename: Full path to the pickle file.
+
+    Returns:
+        Read data into a dictionary.
+    """
+    with open(filename, "rb") as handle:
+        return pickle.load(handle)
+
+def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False):
     # PLOT OF REDESCENDING, ABSOLUTE AND QUADRATIC COST FUNCTIONS
     # we use a redescending cost to stop outliers affecting the optimisation negatively
     redesc_a = 3
     redesc_b = 10
     redesc_c = 20
-
-    # plot
-    r_x = np.arange(-20, 20, 1e-1)
-    r_y1 = [misc.redescending_loss(i, redesc_a, redesc_b, redesc_c) for i in r_x]
-    r_y2 = abs(r_x)
-    r_y3 = r_x ** 2
-    plt.figure()
-    plt.plot(r_x,r_y1, label="Redescending")
-    plt.plot(r_x,r_y2, label="Absolute (linear)")
-    plt.plot(r_x,r_y3, label="Quadratic")
-    ax = plt.gca()
-    ax.set_ylim((-5, 50))
-    ax.legend()
-    if plot:
+    if plot_cost_functions:
+        r_x = np.arange(-20, 20, 1e-1)
+        r_y1 = [misc.redescending_loss(i, redesc_a, redesc_b, redesc_c) for i in r_x]
+        r_y2 = abs(r_x)
+        r_y3 = r_x ** 2
+        plt.figure()
+        plt.plot(r_x,r_y1, label="Redescending")
+        plt.plot(r_x,r_y2, label="Absolute (linear)")
+        plt.plot(r_x,r_y3, label="Quadratic")
+        ax = plt.gca()
+        ax.set_ylim((-5, 50))
+        ax.legend()
         plt.show(block=True)
 
     t0 = time()
@@ -178,9 +194,9 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
     #     p_lure.T
     ])
 
-    func_map = {"sin":sin, "cos":cos, "ImmutableDenseMatrix":np.array} 
+    func_map = {"sin":sin, "cos":cos, "ImmutableDenseMatrix":np.array}
     sym_list = [x, y, z,
-                *phi, *theta, *psi, 
+                *phi, *theta, *psi,
     #             x_l, y_l, z_l
                ]
     pose_to_3d = sp.lambdify(sym_list, positions, modules=[func_map])
@@ -240,8 +256,37 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
 
     proj_funcs = [pt3d_to_x2d, pt3d_to_y2d]
 
-    R = 5 # measurement standard deviation
-
+    # measurement standard deviation
+    R = np.array([
+        1.2, # nose
+        1.24, # l_eye
+        1.18, # r_eye
+        2.08, # neck_base
+        2.04, # spine
+        2.52, # tail_base
+        2.73, # tail1
+        1.83, # tail2
+        3.47, # r_shoulder
+        2.75, # r_front_knee
+        2.69, # r_front_ankle
+        # 2.24, # r_front_paw
+        3.4, # l_shoulder
+        2.91, # l_front_knee
+        2.85, # l_front_ankle
+        # 2.27, # l_front_paw
+        3.26, # r_hip
+        2.76, # r_back_knee
+        2.33, # r_back_ankle
+        # 2.4, # r_back_paw
+        3.53, # l_hip
+        2.69, # l_back_knee
+        2.49, # l_back_ankle
+        # 2.34, # l_back_paw
+    ], dtype=np.float64)
+    R_pw = np.array([[5.13, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.43, 5.39, 6.34, 6.53, 6.14, 6.54, 5.35, 5.33, 6.24, 6.91, 5.8, 6.6],
+    [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=np.float64)
+    # R_pw[:] = 7
+    # R[:] = 3
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
         13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
@@ -290,6 +335,7 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
+    W = 2  # Number of pairwise terms to include.
 
     m.N = RangeSet(N)
     m.P = RangeSet(P)
@@ -297,21 +343,48 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
     m.C = RangeSet(C)
     m.D2 = RangeSet(D2)
     m.D3 = RangeSet(D3)
+    m.W = RangeSet(W)
+
+    # Pairwise correspondence.
+    pw_data = {}
+    for cam in range(C):
+        pw_data[cam] = load_data(os.path.join(DLC_DIR, f"cam{cam+1}-predictions.pickle"))
+
+    index_dict = {"nose":23, "r_eye":0, "l_eye":1, "neck_base":24, "spine":6, "tail_base":22, "tail1":11,
+     "tail2":12, "l_shoulder":13,"l_front_knee":14,"l_front_ankle":15,"r_shoulder":2,
+      "r_front_knee":3, "r_front_ankle":4,"l_hip":17,"l_back_knee":18, "l_back_ankle":19,
+       "r_hip":7,"r_back_knee":8,"r_back_ankle":9}
+
+    pair_dict = {"r_eye":[23, 24], "l_eye":[23, 24], "nose":[6, 24], "neck_base":[6, 23], "spine":[22, 24], "tail_base":[6, 11], "tail1":[6, 22],
+     "tail2":[11, 22], "l_shoulder":[6, 24],"l_front_knee":[6, 24],"l_front_ankle":[6, 24],"r_shoulder":[6, 24],
+      "r_front_knee":[6, 24], "r_front_ankle":[6, 24],"l_hip":[6, 22],"l_back_knee":[6, 22], "l_back_ankle":[6, 22],
+       "r_hip":[6, 22],"r_back_knee":[6, 22],"r_back_ankle":[6, 22]}
 
     # ======= WEIGHTS =======
-    def init_meas_weights(model, n, c, l):
+    def init_meas_weights(m, n, c, l):
         likelihood = get_likelihood_from_df(n+start_frame, c, l)
         if likelihood > dlc_thresh:
-            return 1/R
+            return 1/R[l-1]
         else:
-            return 0
+            return 0.0
     m.meas_err_weight = Param(m.N, m.C, m.L, initialize=init_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0 means that N is too large
+
+    def init_pw_meas_weights(m, n, c, l, w):
+        marker = markers[l-1]
+        pw_marker = get_key(index_dict, pair_dict[marker][w-1])
+        likelihood = get_likelihood_from_df(n+start_frame, c, l)
+        pw_likelihood = get_likelihood_from_df(n+start_frame, c, markers.index(pw_marker)+1)
+        if likelihood <= dlc_thresh and pw_likelihood > dlc_thresh:
+            return 1/R_pw[w-1][l-1]
+        else:
+            return 0.0
+    m.meas_pw_err_weight = Param(m.N, m.C, m.L, m.W, initialize=init_pw_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0
 
     def init_model_weights(m, p):
         if Q[p-1] != 0.0:
             return 1/Q[p-1]
         else:
-            return 0
+            return 0.0
     m.model_err_weight = Param(m.P, initialize=init_model_weights)
 
     # ===== PARAMETERS =====
@@ -321,6 +394,16 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
         return get_meas_from_df(n+start_frame, c, l, d2)
     m.meas = Param(m.N, m.C, m.L, m.D2, initialize=init_measurements_df)
 
+    def init_pw_measurements(m, n, c, l, d2, w):
+        pw_values = pw_data[c-1][n+start_frame]
+        marker = markers[l-1]
+        base = pair_dict[marker][w-1]
+        val = pw_values['pose'][d2-1::3]
+        val_pw = pw_values['pws'][:,:,:,d2-1]
+
+        return val[base]+val_pw[0,base,index_dict[marker]]
+    m.pw_meas = Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_pw_measurements)
+
     # ===== VARIABLES =====
     m.x = Var(m.N, m.P) #position
     m.dx = Var(m.N, m.P) #velocity
@@ -328,6 +411,7 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
     m.poses = Var(m.N, m.L, m.D3)
     m.slack_model = Var(m.N, m.P)
     m.slack_meas = Var(m.N, m.C, m.L, m.D2, initialize=0.0)
+    m.slack_pw_meas = Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
@@ -395,8 +479,15 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
         #project
         K, D, R, t = K_arr[c-1], D_arr[c-1], R_arr[c-1], t_arr[c-1]
         x, y, z = m.poses[n,l,1], m.poses[n,l,2], m.poses[n,l,3]
-        return proj_funcs[d2-1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2] - m.slack_meas[n, c, l, d2] ==0
+        return proj_funcs[d2-1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2] - m.slack_meas[n, c, l, d2] == 0.0
     m.measurement = Constraint(m.N, m.C, m.L, m.D2, rule = measurement_constraints)
+
+    def pw_measurement_constraints(m, n, c, l, d2, w):
+        #project
+        K, D, R, t = K_arr[c-1], D_arr[c-1], R_arr[c-1], t_arr[c-1]
+        x, y, z = m.poses[n,l,1], m.poses[n,l,2], m.poses[n,l,3]
+        return proj_funcs[d2-1](x, y, z, K, D, R, t) - m.pw_meas[n, c, l, d2, w] - m.slack_pw_meas[n, c, l, d2, w] == 0.0
+    m.pw_measurement = Constraint(m.N, m.C, m.L, m.D2, m.W, rule = pw_measurement_constraints)
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     #Head
@@ -447,7 +538,7 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
         return abs(m.x[n,23]) <= np.pi/1.5
     m.tail_mid_theta_5 = Constraint(m.N, rule=tail_mid_theta_5)
     def tail_mid_psi_5(m,n):
-        return abs(m.x[n,37]) <= np.pi/1.5 
+        return abs(m.x[n,37]) <= np.pi/1.5
     m.tail_mid_psi_5 = Constraint(m.N, rule=tail_mid_psi_5)
 
     #Front left leg
@@ -495,6 +586,8 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
                 for c in m.C:
                     for d2 in m.D2:
                         slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l] * m.slack_meas[n, c, l, d2], redesc_a, redesc_b, redesc_c)
+                        for w in m.W:
+                                slack_meas_err += misc.redescending_loss(m.meas_pw_err_weight[n, c, l, w] * m.slack_pw_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
         return slack_meas_err + slack_model_err
 
     m.obj = Objective(rule = obj)
@@ -513,7 +606,7 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
     opt.options["OF_print_timing_statistics"] = "yes"
     opt.options["OF_print_frequency_iter"] = 10
     opt.options["OF_hessian_approximation"] = "limited-memory"
-    # opt.options["linear_solver"] = "ma86"
+    opt.options["linear_solver"] = "ma86"
 
     t1 = time()
     print("\nInitialization took {0:.2f} seconds\n".format(t1 - t0))
@@ -554,7 +647,7 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
 
     [unused_pose_indices] = np.where(Q == 0)
     positions, states = convert_m(m, unused_pose_indices)
-    
+
     out_fpath = os.path.join(OUT_DIR, f"fte.pickle")
     app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
     app.save_3d_cheetah_as_2d(positions, OUT_DIR, scene_fpath, markers, project_points_fisheye, start_frame)
@@ -564,8 +657,8 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh):
 
     fig_fpath= os.path.join(OUT_DIR, 'fte.svg')
     app.plot_cheetah_states(states['x'], out_fpath=fig_fpath)
-    
-    
+
+
 def ekf(DATA_DIR, start_frame, end_frame, dlc_thresh):
     # ========= INIT VARS ========
 
@@ -685,7 +778,7 @@ def ekf(DATA_DIR, start_frame, end_frame, dlc_thresh):
 
     # try:
     #     lure_pts = points_3d_df[points_3d_df["marker"]=="lure"][["frame", "x", "y", "z"]].values
-    #     lure_x_slope, lure_x_intercept, *_ = linregress(lure_pts[:,0], lure_pts[:,1]) 
+    #     lure_x_slope, lure_x_intercept, *_ = linregress(lure_pts[:,0], lure_pts[:,1])
     #     lure_y_slope, lure_y_intercept, *_ = linregress(lure_pts[:,0], lure_pts[:,2])
 
     #     lure_x_est = start_frame*lure_x_slope + lure_x_intercept # initial lure x
@@ -893,8 +986,8 @@ def sba(DATA_DIR: str, DLC_DIR: str, scene_fpath: str, num_frame: int, dlc_thres
             positions[int(frame) - start_frame, i] = pt_3d
 
     app.save_sba(positions, OUT_DIR, scene_fpath, start_frame, dlc_thresh)
-    
-    
+
+
 def tri(DATA_DIR, start_frame, end_frame, dlc_thresh):
     assert os.path.exists(DATA_DIR)
     OUT_DIR = os.path.join(DATA_DIR, 'tri')
@@ -937,14 +1030,14 @@ def tri(DATA_DIR: str, DLC_DIR: str, start_frame: int, end_frame: int, dlc_thres
             positions[int(frame) - start_frame, i] = pt_3d
 
     app.save_tri(positions, OUT_DIR, scene_fpath, start_frame, dlc_thresh)
-    
-    
+
+
 def dlc(DATA_DIR, dlc_thresh):
     video_fpaths = sorted(glob(os.path.join(DATA_DIR, 'cam[1-9].mp4'))) # original vids should be in the parent dir
     out_dir = os.path.join(DATA_DIR, 'dlc')
     app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
-    
-    
+
+
 # ========= MAIN ========
 
 if __name__ == "__main__":
@@ -956,10 +1049,10 @@ if __name__ == "__main__":
     parser.add_argument('--dlc_thresh', type=float, default=0.8, help='The likelihood of the dlc points below which will be excluded from the optimization')
     parser.add_argument('--plot', action='store_true', help='Showing plots')
     args = parser.parse_args()
-    
+
     ROOT_DATA_DIR = os.path.join("..", "data")
     DATA_DIR = os.path.join(ROOT_DATA_DIR, os.path.normpath(args.data_dir))
-    
+
     print('========== DLC ==========\n')
     dlc(DATA_DIR, args.dlc_thresh)
     print('========== Triangulation ==========\n')
@@ -974,11 +1067,10 @@ if __name__ == "__main__":
     print('========== FTE ==========\n')
     fte(DATA_DIR, args.start_frame, args.end_frame, args.dlc_thresh)
     plt.close('all')
-    
+
     print('Plotting results...')
     data_fpaths = [#os.path.join(DATA_DIR, 'tri', 'tri.pickle'), # plot is too busy when tri is included
                    os.path.join(DATA_DIR, 'sba', 'sba.pickle'),
                    os.path.join(DATA_DIR, 'ekf', 'ekf.pickle'),
                    os.path.join(DATA_DIR, 'fte', 'fte.pickle')]
     app.plot_multiple_cheetah_reconstructions(data_fpaths, reprojections=False, dark_mode=True)
-    
