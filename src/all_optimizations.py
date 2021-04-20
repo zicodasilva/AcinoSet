@@ -2,11 +2,13 @@ from argparse import ArgumentParser
 from typing import Dict, Tuple, Any
 
 # imports from notebooks
+import cv2
 import os
 import pickle
 import numpy as np
 import sympy as sp
 import pandas as pd
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 from glob import glob
 from time import time
@@ -18,12 +20,44 @@ from lib.calib import triangulate_points_fisheye, project_points_fisheye
 
 plt.style.use(os.path.join('..', 'configs', 'mplstyle.yaml'))
 
+# TODO: Remove. This is used for debugging purposes only.
+def display_test_image(DATA_DIR, cam_num, pw_values, frame_num):
+    markers = misc.get_markers()
+    marker_colors = cm.rainbow(np.linspace(0, 1, len(markers)))
+    frame = os.path.join(DATA_DIR, "frames", f"cam{cam_num}", f"frame{frame_num}.png")
+    for pw in pw_values:
+        # Plot the image.
+        image = cv2.cvtColor(cv2.imread(frame), cv2.COLOR_BGR2RGB)
+        plt.figure(pw)
+        plt.imshow(image)
+        df = pd.read_hdf(os.path.join(DATA_DIR, "fte", "measurements", f"cam{cam_num}_pw_{pw}.h5"))
+        for idx, marker in enumerate(markers):
+            plt.plot(df.loc[frame_num-1][marker]["x"],
+                        df.loc[frame_num-1][marker]["y"],
+                        ".",
+                        markersize=10,
+                        color=marker_colors[idx],
+                        label=marker)
+            plt.legend(loc="upper right", fontsize="xx-small")
+    # Show the plot.
+    plt.show()
+
 def get_key(dict_data: Dict, value: Any) -> str:
     for key, val in dict_data.items():
          if val == value:
              return key
 
     raise ValueError(f"Could not find key corresponding to value: {value}")
+
+def save_data(filename: str, data: Dict) -> None:
+    """Saves dictionary as a pickle file to a user supplied destination directory.
+
+    Args:
+        filename: Full path to the directory and he filename for the pickle file.
+        data: The data to be saved.
+    """
+    with open(filename, "wb") as handle:
+        pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 def load_data(filename: str):
     """Reads data from a pickle file.
@@ -283,10 +317,13 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
         2.49, # l_back_ankle
         # 2.34, # l_back_paw
     ], dtype=np.float64)
-    R_pw = np.array([[5.13, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.43, 5.39, 6.34, 6.53, 6.14, 6.54, 5.35, 5.33, 6.24, 6.91, 5.8, 6.6],
-    [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=np.float64)
-    # R_pw[:] = 7
-    # R[:] = 3
+    # R_pw = np.array([R, [5.13, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.43, 5.39, 6.34, 6.53, 6.14, 6.54, 5.35, 5.33, 6.24, 6.91, 5.8, 6.6],
+    # [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=np.float64)
+    R_pw = np.array([R, [2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 5.18, 5.28, 5.5, 4.7, 4.7, 5.21, 5.1, 5.27, 5.75],
+    [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 8.83, 6.52, 6.22, 6.8, 6.12, 5.37, 7.83, 6.44, 6.1]], dtype=np.float64)
+    # R_pw[0, :] = 5
+    # R_pw[1, :] = 10
+    # R_pw[2, :] = 15
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
         13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
@@ -335,7 +372,7 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
-    W = 2  # Number of pairwise terms to include.
+    W = 3  # Number of pairwise terms to include + the base measurement.
 
     m.N = RangeSet(N)
     m.P = RangeSet(P)
@@ -351,14 +388,18 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
         pw_data[cam] = load_data(os.path.join(DLC_DIR, f"cam{cam+1}-predictions.pickle"))
 
     index_dict = {"nose":23, "r_eye":0, "l_eye":1, "neck_base":24, "spine":6, "tail_base":22, "tail1":11,
-     "tail2":12, "l_shoulder":13,"l_front_knee":14,"l_front_ankle":15,"r_shoulder":2,
-      "r_front_knee":3, "r_front_ankle":4,"l_hip":17,"l_back_knee":18, "l_back_ankle":19,
-       "r_hip":7,"r_back_knee":8,"r_back_ankle":9}
+     "tail2":12, "l_shoulder":13,"l_front_knee":14,"l_front_ankle":15, "l_front_paw": 16, "r_shoulder":2,
+      "r_front_knee":3, "r_front_ankle":4, "r_front_paw": 5, "l_hip":17, "l_back_knee":18, "l_back_ankle":19, "l_back_paw": 20,
+       "r_hip":7,"r_back_knee":8,"r_back_ankle":9, "r_back_paw": 10}
 
-    pair_dict = {"r_eye":[23, 24], "l_eye":[23, 24], "nose":[6, 24], "neck_base":[6, 23], "spine":[22, 24], "tail_base":[6, 11], "tail1":[6, 22],
-     "tail2":[11, 22], "l_shoulder":[6, 24],"l_front_knee":[6, 24],"l_front_ankle":[6, 24],"r_shoulder":[6, 24],
-      "r_front_knee":[6, 24], "r_front_ankle":[6, 24],"l_hip":[6, 22],"l_back_knee":[6, 22], "l_back_ankle":[6, 22],
-       "r_hip":[6, 22],"r_back_knee":[6, 22],"r_back_ankle":[6, 22]}
+    # pair_dict = {"r_eye":[23, 24], "l_eye":[23, 24], "nose":[6, 24], "neck_base":[6, 23], "spine":[22, 24], "tail_base":[6, 11], "tail1":[6, 22],
+    #  "tail2":[11, 22], "l_shoulder":[6, 24],"l_front_knee":[6, 24],"l_front_ankle":[6, 24],"r_shoulder":[6, 24],
+    #   "r_front_knee":[6, 24], "r_front_ankle":[6, 24],"l_hip":[6, 22],"l_back_knee":[6, 22], "l_back_ankle":[6, 22],
+    #    "r_hip":[6, 22],"r_back_knee":[6, 22],"r_back_ankle":[6, 22]}
+    pair_dict = {"r_eye":[23, 1], "l_eye":[23, 0], "nose":[0, 1], "neck_base":[6, 23], "spine":[22, 24], "tail_base":[6, 11], "tail1":[6, 22],
+     "tail2":[11, 22], "l_shoulder":[14, 24],"l_front_knee":[13, 15],"l_front_ankle":[13, 14], "l_front_paw": [14, 15], "r_shoulder":[3, 24],
+      "r_front_knee":[2, 4], "r_front_ankle":[2, 3], "r_front_paw": [3, 4], "l_hip": [18, 22], "l_back_knee":[17, 19], "l_back_ankle":[17, 18], "l_back_paw": [18, 19],
+       "r_hip":[8, 22], "r_back_knee":[7, 9],"r_back_ankle":[7, 8], "r_back_paw": [8, 9]}
 
     # ======= WEIGHTS =======
     def init_meas_weights(m, n, c, l):
@@ -367,17 +408,23 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
             return 1/R[l-1]
         else:
             return 0.0
-    m.meas_err_weight = Param(m.N, m.C, m.L, initialize=init_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0 means that N is too large
+    # m.meas_err_weight = Param(m.N, m.C, m.L, initialize=init_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0 means that N is too large
 
     def init_pw_meas_weights(m, n, c, l, w):
-        marker = markers[l-1]
-        pw_marker = get_key(index_dict, pair_dict[marker][w-1])
-        likelihood = get_likelihood_from_df(n+start_frame, c, l)
-        pw_likelihood = get_likelihood_from_df(n+start_frame, c, markers.index(pw_marker)+1)
-        if likelihood <= dlc_thresh and pw_likelihood > dlc_thresh:
-            return 1/R_pw[w-1][l-1]
+        if w < 2:
+            likelihood = get_likelihood_from_df(n+start_frame, c, l)
+            if likelihood > dlc_thresh:
+                return 1/R_pw[w-1][l-1]
+            else:
+                return 0.0
         else:
-            return 0.0
+            marker = markers[l-1]
+            pw_marker = get_key(index_dict, pair_dict[marker][w-2])
+            pw_likelihood = get_likelihood_from_df(n+start_frame, c, markers.index(pw_marker)+1)
+            if pw_likelihood > dlc_thresh:
+                return 1/R_pw[w-1][l-1]
+            else:
+                return 0.0
     m.meas_pw_err_weight = Param(m.N, m.C, m.L, m.W, initialize=init_pw_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0
 
     def init_model_weights(m, p):
@@ -392,17 +439,41 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
 
     def init_measurements_df(m, n, c, l, d2):
         return get_meas_from_df(n+start_frame, c, l, d2)
-    m.meas = Param(m.N, m.C, m.L, m.D2, initialize=init_measurements_df)
+    # m.meas = Param(m.N, m.C, m.L, m.D2, initialize=init_measurements_df)
 
     def init_pw_measurements(m, n, c, l, d2, w):
-        pw_values = pw_data[c-1][n+start_frame]
-        marker = markers[l-1]
-        base = pair_dict[marker][w-1]
-        val = pw_values['pose'][d2-1::3]
-        val_pw = pw_values['pws'][:,:,:,d2-1]
-
-        return val[base]+val_pw[0,base,index_dict[marker]]
+        if w < 2:
+            return get_meas_from_df(n+start_frame, c, l, d2)
+        else:
+            pw_values = pw_data[c-1][n+start_frame]
+            marker = markers[l-1]
+            base = pair_dict[marker][w-2]
+            val = pw_values['pose'][d2-1::3]
+            val_pw = pw_values['pws'][:,:,:,d2-1]
+            return val[base]+val_pw[0,base,index_dict[marker]]
     m.pw_meas = Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_pw_measurements)
+
+    # Generate dataframe with the measurements that are used in the optimisation.
+    # This allows for inspection of the normal and pairwise predictions used in the FTE.
+    measurement_dir = os.path.join(OUT_DIR, "measurements")
+    os.makedirs(measurement_dir, exist_ok=True)
+    xy_labels = ["x", "y"]
+    pd_index = pd.MultiIndex.from_product([markers, xy_labels], names=["bodyparts", "coords"])
+    for c in m.C:
+        for w in m.W:
+            included_measurements = []
+            for n in m.N:
+                included_measurements.append([])
+                for l in m.L:
+                    if m.meas_pw_err_weight[n, c, l, w] != 0.0:
+                        included_measurements[n-1].append([m.pw_meas[n, c, l, 1, w], m.pw_meas[n, c, l, 2, w]])
+                    else:
+                        included_measurements[n-1].append([float("NaN"), float("NaN")])
+            measurements = np.array(included_measurements)
+            n_frames = len(measurements)
+            df = pd.DataFrame(measurements.reshape((n_frames, -1)), columns=pd_index, index=range(start_frame, start_frame+n_frames))
+            # df.to_csv(os.path.join(OUT_DIR, "measurements", f"cam{c}_fte.csv"))
+            df.to_hdf(os.path.join(measurement_dir, f"cam{c}_pw_{w}.h5"), "df_with_missing", format="table", mode="w")
 
     # ===== VARIABLES =====
     m.x = Var(m.N, m.P) #position
@@ -410,7 +481,7 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     m.ddx = Var(m.N, m.P) #acceleration
     m.poses = Var(m.N, m.L, m.D3)
     m.slack_model = Var(m.N, m.P)
-    m.slack_meas = Var(m.N, m.C, m.L, m.D2, initialize=0.0)
+    # m.slack_meas = Var(m.N, m.C, m.L, m.D2, initialize=0.0)
     m.slack_pw_meas = Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
@@ -480,7 +551,7 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
         K, D, R, t = K_arr[c-1], D_arr[c-1], R_arr[c-1], t_arr[c-1]
         x, y, z = m.poses[n,l,1], m.poses[n,l,2], m.poses[n,l,3]
         return proj_funcs[d2-1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2] - m.slack_meas[n, c, l, d2] == 0.0
-    m.measurement = Constraint(m.N, m.C, m.L, m.D2, rule = measurement_constraints)
+    # m.measurement = Constraint(m.N, m.C, m.L, m.D2, rule = measurement_constraints)
 
     def pw_measurement_constraints(m, n, c, l, d2, w):
         #project
@@ -585,9 +656,9 @@ def fte(DATA_DIR, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
             for l in m.L:
                 for c in m.C:
                     for d2 in m.D2:
-                        slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l] * m.slack_meas[n, c, l, d2], redesc_a, redesc_b, redesc_c)
+                        # slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l] * m.slack_meas[n, c, l, d2], redesc_a, redesc_b, redesc_c)
                         for w in m.W:
-                                slack_meas_err += misc.redescending_loss(m.meas_pw_err_weight[n, c, l, w] * m.slack_pw_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
+                            slack_meas_err += misc.redescending_loss(m.meas_pw_err_weight[n, c, l, w] * m.slack_pw_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
         return slack_meas_err + slack_model_err
 
     m.obj = Objective(rule = obj)
@@ -1073,4 +1144,5 @@ if __name__ == "__main__":
                    os.path.join(DATA_DIR, 'sba', 'sba.pickle'),
                    os.path.join(DATA_DIR, 'ekf', 'ekf.pickle'),
                    os.path.join(DATA_DIR, 'fte', 'fte.pickle')]
-    app.plot_multiple_cheetah_reconstructions(data_fpaths, reprojections=False, dark_mode=True)
+    app.plot_multiple_cheetah_reconstructions(data_fpaths, reprojections=True, dark_mode=True)
+    # display_test_image(DATA_DIR, 1, (1, 2, 3), 130)
