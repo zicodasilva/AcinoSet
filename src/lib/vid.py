@@ -8,8 +8,6 @@ import os
 import cv2 as cv
 import numpy as np
 import pandas as pd
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
 from glob import glob
 from tqdm import trange
 
@@ -71,7 +69,7 @@ class VideoProcessor(object):
 
     def frame_count(self):
         return self.nframes
-    
+
     def codec(self):
         return self.CODEC
 
@@ -167,6 +165,9 @@ def get_segment_indices(bodyparts2connect, all_bpts):
 
 def CreateVideo(clip, df, pcutoff, bodyparts2plot, bodyparts2connect, dotsize, colormap, draw_skeleton, skeleton_color):
     """Creating individual frames with labeled body parts and making a video"""
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
     bpts = df.columns.get_level_values('bodyparts')
     all_bpts = bpts.values[::3]
     if draw_skeleton:
