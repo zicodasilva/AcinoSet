@@ -344,7 +344,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
-    W = 1  # Number of pairwise terms to include + the base measurement.
+    W = 3  # Number of pairwise terms to include + the base measurement.
 
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
