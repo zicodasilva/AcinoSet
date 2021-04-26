@@ -4,6 +4,7 @@ from typing import Dict, Any
 # imports from notebooks
 import os
 import pickle
+import cloudpickle
 import numpy as np
 import sympy as sp
 import pandas as pd
@@ -14,63 +15,42 @@ import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 from lib import misc, utils, app
 from lib.calib import triangulate_points_fisheye, project_points_fisheye
+from py_utils import data_ops, log
 
-def get_key(dict_data: Dict, value: Any) -> str:
-    for key, val in dict_data.items():
-         if val == value:
-             return key
+# Create a module logger with the name of this file.
+logger = log.logger(__name__)
 
-    raise ValueError(f"Could not find key corresponding to value: {value}")
+def compare(first_file: str, second_file: str):
+    data_fpaths = [first_file, second_file]
+    app.plot_multiple_cheetah_reconstructions(data_fpaths, reprojections=False, dark_mode=True)
 
-def save_data(filename: str, data: Dict) -> None:
-    """Saves dictionary as a pickle file to a user supplied destination directory.
+def display_test_image(data_dir, cam_num, pw_values, frame_num):
+    import cv2
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
 
-    Args:
-        filename: Full path to the directory and he filename for the pickle file.
-        data: The data to be saved.
-    """
-    with open(filename, "wb") as handle:
-        pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    markers = misc.get_markers()
+    marker_colors = cm.rainbow(np.linspace(0, 1, len(markers)))
+    frame = os.path.join(data_dir, "frames", f"cam{cam_num}", f"frame{frame_num}.png")
+    for pw in pw_values:
+        # Plot the image.
+        image = cv2.cvtColor(cv2.imread(frame), cv2.COLOR_BGR2RGB)
+        plt.figure(pw)
+        plt.imshow(image)
+        df = pd.read_hdf(os.path.join(data_dir, "fte_pw", "measurements", f"cam{cam_num}_pw_{pw}.h5"))
+        for idx, marker in enumerate(markers):
+            plt.plot(df.loc[frame_num-1][marker]["x"],
+                        df.loc[frame_num-1][marker]["y"],
+                        ".",
+                        markersize=10,
+                        color=marker_colors[idx],
+                        label=marker)
+            plt.legend(loc="upper right", fontsize="xx-small")
+    # Show the plot.
+    plt.show()
 
-def load_data(filename: str):
-    """Reads data from a pickle file.
-
-    Args:
-        filename: Full path to the pickle file.
-
-    Returns:
-        Read data into a dictionary.
-    """
-    with open(filename, "rb") as handle:
-        return pickle.load(handle)
-
-def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False):
-    # We use a redescending cost to stop outliers affecting the optimisation negatively
-    redesc_a = 3
-    redesc_b = 10
-    redesc_c = 20
-
-    t0 = time()
-
-    assert os.path.exists(data_dir)
-    out_dir = os.path.join(data_dir, "fte")
-    dlc_dir = os.path.join(data_dir, "dlc")
-    assert os.path.exists(dlc_dir)
-    os.makedirs(out_dir, exist_ok=True)
-
-    app.start_logging(os.path.join(out_dir, "fte.log"))
-
-    # load video info
-    res, fps, tot_frames, _ = app.get_vid_info(data_dir) # path to original videos
-    assert end_frame <= tot_frames, f"end_frame must be less than or equal to {tot_frames}"
-    end_frame = tot_frames if end_frame == -1 else end_frame
-
-    start_frame -= 1    # 0 based indexing
-    assert start_frame >= 0
-    N = end_frame - start_frame
-    Ts = 1.0 / fps  # timestep
-
-    ## ========= POSE FUNCTIONS ========
+def create_pose_functions(data_dir):
+     ## ========= POSE FUNCTIONS ========
     #SYMBOLIC ROTATION MATRIX FUNCTIONS
     def rot_x(x):
         c = sp.cos(x)
@@ -197,6 +177,39 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     for i in range(positions.shape[0]):
         lamb = sp.lambdify(sym_list, positions[i,:], modules=[func_map])
         pos_funcs.append(lamb)
+    # with open(os.path.join(data_dir, "pose_3d_functions.pickle"), "wb") as file:
+    #     cloudpickle.dump((pose_to_3d, pos_funcs), file)
+    data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
+
+def run(data_dir, start_frame, end_frame, dlc_thresh):
+    logger.info("Prepare data - Start")
+    # We use a redescending cost to stop outliers affecting the optimisation negatively
+    redesc_a = 3
+    redesc_b = 10
+    redesc_c = 20
+
+    t0 = time()
+
+    assert os.path.exists(data_dir)
+    out_dir = os.path.join(data_dir, "fte_pw")
+    dlc_dir = os.path.join(data_dir, "dlc_pw")
+    assert os.path.exists(dlc_dir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    app.start_logging(os.path.join(out_dir, "fte.log"))
+
+    # load video info
+    res, fps, tot_frames, _ = app.get_vid_info(data_dir) # path to original videos
+    assert end_frame <= tot_frames, f"end_frame must be less than or equal to {tot_frames}"
+    end_frame = tot_frames if end_frame == -1 else end_frame
+
+    start_frame -= 1    # 0 based indexing
+    assert start_frame >= 0
+    N = end_frame - start_frame
+    Ts = 1.0 / fps  # timestep
+
+    ## ========= POSE FUNCTIONS ========
+    pose_to_3d, pos_funcs = data_ops.load_data("../data/pose_3d_functions.pickle")
 
     # ========= PROJECTION FUNCTIONS ========
     def pt3d_to_2d(x, y, z, K, D, R, t):
@@ -280,9 +293,9 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     # [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=np.float64)
     R_pw = np.array([R, [2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 5.18, 5.28, 5.5, 4.7, 4.7, 5.21, 5.1, 5.27, 5.75],
     [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 8.83, 6.52, 6.22, 6.8, 6.12, 5.37, 7.83, 6.44, 6.1]], dtype=np.float64)
-    R_pw[0, :] = 5
-    R_pw[1, :] = 10
-    R_pw[2, :] = 15
+    # R_pw[0, :] = 5
+    # R_pw[1, :] = 10
+    # R_pw[2, :] = 15
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
         13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
@@ -295,8 +308,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     #===================================================
     #                   Load in data
     #===================================================
-    print("Loading data")
-
+    logger.info("Load H5 2D DLC prediction data")
     df_paths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
 
     points_2d_df = utils.load_dlc_points_as_df(df_paths, verbose=False)
@@ -307,6 +319,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     )
 
     # estimate initial points
+    logger.info("Estimate the initial trajectory")
     nose_pts = points_3d_df[points_3d_df["marker"]=="nose"][["frame", "x", "y", "z"]].values
     x_slope, x_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,1])
     y_slope, y_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,2])
@@ -317,21 +330,21 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     z_est = frame_est*z_slope + z_intercept
     psi_est = np.arctan2(y_slope, x_slope)
 
+    logger.info("Prepare data - End")
     #===================================================
     #                   Optimisation
     #===================================================
-    print("\nStarted Optimisation")
+    logger.info("Setup optimisation - Start")
     m = pyo.ConcreteModel(name = "Cheetah from measurements")
     m.Ts = Ts
-
     # ===== SETS =====
     N = end_frame-start_frame # number of timesteps in trajectory
-    P = 3 + len(phi)+len(theta)+len(psi)# + 3  # number of pose parameters (x, y, z, phi_1..n, theta_1..n, psi_1..n, x_l, y_l, z_l)
-    L = len(pos_funcs) # number of dlc labels per frame
+    P = 3 + 3 * 14 # + 3  # number of pose parameters (x, y, z, phi_1..n, theta_1..n, psi_1..n, x_l, y_l, z_l)
+    L = len(markers) # number of dlc labels per frame
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
-    W = 2  # Number of pairwise terms to include + the base measurement.
+    W = 1  # Number of pairwise terms to include + the base measurement.
 
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
@@ -344,7 +357,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     # Pairwise correspondence.
     pw_data = {}
     for cam in range(C):
-        pw_data[cam] = load_data(os.path.join(dlc_dir, f"cam{cam+1}-predictions.pickle"))
+        pw_data[cam] = data_ops.load_data(os.path.join(dlc_dir, f"cam{cam+1}-predictions.pickle"))
 
     index_dict = {"nose":23, "r_eye":0, "l_eye":1, "neck_base":24, "spine":6, "tail_base":22, "tail1":11,
      "tail2":12, "l_shoulder":13,"l_front_knee":14,"l_front_ankle":15, "l_front_paw": 16, "r_shoulder":2,
@@ -370,16 +383,24 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     # m.meas_err_weight = Param(m.N, m.C, m.L, initialize=init_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0 means that N is too large
 
     def init_pw_meas_weights(m, n, c, l, w):
+        pw_values = pw_data[c-1][(n-1)+start_frame]
+        val = pw_values['pose'][2::3]
+        marker = markers[l-1]
         if w < 2:
-            likelihood = get_likelihood_from_df(n+start_frame, c, l)
+            # likelihood = get_likelihood_from_df(n+start_frame, c, l)
+            # marker = markers[l-1]
+            base = index_dict[marker]
+            likelihood = val[base]
             if likelihood > dlc_thresh:
                 return 1/R_pw[w-1][l-1]
             else:
                 return 0.0
         else:
-            marker = markers[l-1]
-            pw_marker = get_key(index_dict, pair_dict[marker][w-2])
-            pw_likelihood = get_likelihood_from_df(n+start_frame, c, markers.index(pw_marker)+1)
+            base = pair_dict[marker][w-2]
+            # pw_values = pw_data[c-1][(n-1)+start_frame]
+            # pw_marker = get_key(index_dict, pair_dict[marker][w-2])
+            # pw_likelihood = get_likelihood_from_df(n+start_frame, c, markers.index(pw_marker)+1)
+            pw_likelihood = val[base]
             if pw_likelihood > dlc_thresh:
                 return 1/R_pw[w-1][l-1]
             else:
@@ -394,20 +415,21 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     m.model_err_weight = pyo.Param(m.P, initialize=init_model_weights)
 
     # ===== PARAMETERS =====
-    print("Initialising params & variables")
-
     def init_measurements_df(m, n, c, l, d2):
         return get_meas_from_df(n+start_frame, c, l, d2)
     # m.meas = Param(m.N, m.C, m.L, m.D2, initialize=init_measurements_df)
 
     def init_pw_measurements(m, n, c, l, d2, w):
+        pw_values = pw_data[c-1][(n-1)+start_frame]
+        val = pw_values['pose'][d2-1::3]
+        marker = markers[l-1]
         if w < 2:
-            return get_meas_from_df(n+start_frame, c, l, d2)
+            base = index_dict[marker]
+            return val[base]
+            # return get_meas_from_df(n+start_frame, c, l, d2)
         else:
-            pw_values = pw_data[c-1][(n-1)+start_frame]
-            marker = markers[l-1]
             base = pair_dict[marker][w-2]
-            val = pw_values['pose'][d2-1::3]
+            # val = pw_values['pose'][d2-1::3]
             val_pw = pw_values['pws'][:,:,:,d2-1]
             return val[base]+val_pw[0,base,index_dict[marker]]
     m.pw_meas = pyo.Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_pw_measurements)
@@ -434,6 +456,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
             # df.to_csv(os.path.join(OUT_DIR, "measurements", f"cam{c}_fte.csv"))
             df.to_hdf(os.path.join(measurement_dir, f"cam{c}_pw_{w}.h5"), "df_with_missing", format="table", mode="w")
 
+    logger.info("Measurement initialisation...Done")
     # ===== VARIABLES =====
     m.x = pyo.Var(m.N, m.P) #position
     m.dx = pyo.Var(m.N, m.P) #velocity
@@ -465,21 +488,23 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
         var_list = [m.x[n,p].value for p in range(1, P+1)]
         for l in m.L:
             [pos] = pos_funcs[l-1](*var_list)
+            # pos = pose_to_3d(*var_list)[l-1]
             for d3 in m.D3:
                 m.poses[n,l,d3].value = pos[d3-1]
 
+    logger.info("Variable initialisation...Done")
     # ===== CONSTRAINTS =====
     # 3D POSE
     def pose_constraint(m,n,l,d3):
         #get 3d points
         var_list = [m.x[n,p] for p in range(1, P+1)]
         [pos] = pos_funcs[l-1](*var_list)
+        # pos = pose_to_3d(*var_list)[l-1]
         return pos[d3-1] == m.poses[n,l,d3]
 
     m.pose_constraint = pyo.Constraint(m.N, m.L, m.D3, rule=pose_constraint)
 
     # INTEGRATION
-    print("Numerical integration")
     def backwards_euler_pos(m,n,p): # position
         if n > 1:
     #             return m.x[n,p] == m.x[n-1,p] + m.h*m.dx[n-1,p] + m.h**2 * m.ddx[n-1,p]/2
@@ -603,6 +628,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
         return abs(m.x[n,31] - np.pi/2) <= np.pi/2
     m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=r_back_knee_theta_13)
 
+    logger.info("Constaint initialisation...Done")
     # ======= OBJECTIVE FUNCTION =======
     def obj(m):
         slack_model_err = 0.0
@@ -622,6 +648,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
 
     m.obj = pyo.Objective(rule = obj)
 
+    logger.info("Objective initialisation...Done")
     # RUN THE SOLVER
     opt = SolverFactory(
         'ipopt',
@@ -638,18 +665,19 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     opt.options["OF_hessian_approximation"] = "limited-memory"
     opt.options["linear_solver"] = "ma86"
 
+    logger.info("Setup optimisation - End")
     t1 = time()
-    print("\nInitialization took {0:.2f} seconds\n".format(t1 - t0))
+    logger.info(f"Initialisation took {t1 - t0:.2f}s")
 
     t0 = time()
     results = opt.solve(m, tee=True)
     t1 = time()
-    print("\nOptimization took {0:.2f} seconds\n".format(t1 - t0))
+    logger.info(f"Optimisation solver took {t1 - t0:.2f}s")
 
     app.stop_logging()
 
+    logger.info("Generate outputs...")
     # ===== SAVE FTE RESULTS =====
-
     def convert_m(m, pose_indices):
         x_optimised, dx_optimised, ddx_optimised = [], [], []
         for n in m.N:
@@ -685,17 +713,4 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, plot_cost_functions=False)
     video_fpaths = sorted(glob(os.path.join(os.path.dirname(out_dir), 'cam[1-9].mp4'))) # original vids should be in the parent dir
     app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
-if __name__ == "__main__":
-    parser = ArgumentParser(description='All Optimizations')
-    parser.add_argument('--data_dir', type=str, help='The data directory path to the flick/run to be optimized')
-    parser.add_argument('--start_frame', type=int, default=1, help='The frame at which the optimized reconstruction will start at')
-    parser.add_argument('--end_frame', type=int, default=-1, help='The frame at which the optimized reconstruction will end at')
-    parser.add_argument('--dlc_thresh', type=float, default=0.8, help='The likelihood of the dlc points below which will be excluded from the optimization')
-    parser.add_argument('--plot', action='store_true', help='Showing plots')
-    args = parser.parse_args()
-
-    root_dir = os.path.join("..", "data")
-    data_dir = os.path.join(root_dir, os.path.normpath(args.data_dir))
-
-    print("========== FTE ==========")
-    run(data_dir, args.start_frame, args.end_frame, args.dlc_thresh)
+    logger.info("Done")
