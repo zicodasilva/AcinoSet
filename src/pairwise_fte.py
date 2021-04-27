@@ -1,10 +1,4 @@
-from argparse import ArgumentParser
-from typing import Dict, Any
-
-# imports from notebooks
 import os
-import pickle
-import cloudpickle
 import numpy as np
 import sympy as sp
 import pandas as pd
@@ -208,6 +202,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
 
+    logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
     ## ========= POSE FUNCTIONS ========
     pose_to_3d, pos_funcs = data_ops.load_data("../data/pose_3d_functions.pickle")
 
@@ -338,7 +333,6 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     m = pyo.ConcreteModel(name = "Cheetah from measurements")
     m.Ts = Ts
     # ===== SETS =====
-    N = end_frame-start_frame # number of timesteps in trajectory
     P = 3 + 3 * 14 # + 3  # number of pose parameters (x, y, z, phi_1..n, theta_1..n, psi_1..n, x_l, y_l, z_l)
     L = len(markers) # number of dlc labels per frame
     C = len(K_arr) # number of cameras
@@ -652,7 +646,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     # RUN THE SOLVER
     opt = SolverFactory(
         'ipopt',
-        # executable='./CoinIpopt/build/bin/ipopt'
+        # executable='/home/zico/lib/ipopt/build/bin/ipopt'
     )
 
     # solver options
