@@ -171,8 +171,8 @@ def create_pose_functions(data_dir):
     for i in range(positions.shape[0]):
         lamb = sp.lambdify(sym_list, positions[i,:], modules=[func_map])
         pos_funcs.append(lamb)
-    # with open(os.path.join(data_dir, "pose_3d_functions.pickle"), "wb") as file:
-    #     cloudpickle.dump((pose_to_3d, pos_funcs), file)
+
+    # Save the functions to file.
     data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
 
 def run(data_dir, start_frame, end_frame, dlc_thresh):
@@ -338,7 +338,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
-    W = 3  # Number of pairwise terms to include + the base measurement.
+    W = 2  # Number of pairwise terms to include + the base measurement.
 
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
@@ -347,6 +347,15 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     m.D2 = pyo.RangeSet(D2)
     m.D3 = pyo.RangeSet(D3)
     m.W = pyo.RangeSet(W)
+
+    # Base measurments. TODO: This is not technically required but it is a lot faster than using pandas for querying data.
+    data = {}
+    cam_idx = 0
+    for path in df_paths:
+        dlc_df = pd.read_hdf(path)
+        pose_array = dlc_df.droplevel([0], axis=1).to_numpy()
+        data[cam_idx] = pose_array
+        cam_idx += 1
 
     # Pairwise correspondence.
     pw_data = {}
@@ -368,38 +377,26 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
        "r_hip":[8, 22], "r_back_knee":[7, 9],"r_back_ankle":[7, 8], "r_back_paw": [8, 9]}
 
     # ======= WEIGHTS =======
-    def init_meas_weights(m, n, c, l):
-        likelihood = get_likelihood_from_df(n+start_frame, c, l)
-        if likelihood > dlc_thresh:
-            return 1/R[l-1]
-        else:
-            return 0.0
-    # m.meas_err_weight = Param(m.N, m.C, m.L, initialize=init_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0 means that N is too large
-
-    def init_pw_meas_weights(m, n, c, l, w):
-        pw_values = pw_data[c-1][(n-1)+start_frame]
-        val = pw_values['pose'][2::3]
+    def init_meas_weights(m, n, c, l, w):
+        # Determine if the current measurement is the base prediction or a pairwise prediction.
         marker = markers[l-1]
         if w < 2:
-            # likelihood = get_likelihood_from_df(n+start_frame, c, l)
-            # marker = markers[l-1]
+            values = data[c-1][(n-1)+start_frame]
+            val = values[2::3]
             base = index_dict[marker]
             likelihood = val[base]
-            if likelihood > dlc_thresh:
-                return 1/R_pw[w-1][l-1]
-            else:
-                return 0.0
         else:
             base = pair_dict[marker][w-2]
-            # pw_values = pw_data[c-1][(n-1)+start_frame]
-            # pw_marker = get_key(index_dict, pair_dict[marker][w-2])
-            # pw_likelihood = get_likelihood_from_df(n+start_frame, c, markers.index(pw_marker)+1)
-            pw_likelihood = val[base]
-            if pw_likelihood > dlc_thresh:
-                return 1/R_pw[w-1][l-1]
-            else:
-                return 0.0
-    m.meas_pw_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_pw_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0
+            pw_values = pw_data[c-1][(n-1)+start_frame]
+            val = pw_values["pose"][2::3]
+            likelihood = val[base]
+
+        # Filter measurements based on DLC threshold. This does ensures that badly predicted points are not considered in the objective function.
+        if likelihood > dlc_thresh:
+            return 1/R_pw[w-1][l-1]
+        else:
+            return 0.0
+    m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0
 
     def init_model_weights(m, p):
         if Q[p-1] != 0.0:
@@ -409,24 +406,20 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     m.model_err_weight = pyo.Param(m.P, initialize=init_model_weights)
 
     # ===== PARAMETERS =====
-    def init_measurements_df(m, n, c, l, d2):
-        return get_meas_from_df(n+start_frame, c, l, d2)
-    # m.meas = Param(m.N, m.C, m.L, m.D2, initialize=init_measurements_df)
-
-    def init_pw_measurements(m, n, c, l, d2, w):
-        pw_values = pw_data[c-1][(n-1)+start_frame]
-        val = pw_values['pose'][d2-1::3]
+    def init_measurements(m, n, c, l, d2, w):
+        # Determine if the current measurement is the base prediction or a pairwise prediction.
+        values = data[c-1][(n-1)+start_frame]
+        val = values[d2-1::3]
         marker = markers[l-1]
         if w < 2:
             base = index_dict[marker]
             return val[base]
-            # return get_meas_from_df(n+start_frame, c, l, d2)
         else:
             base = pair_dict[marker][w-2]
-            # val = pw_values['pose'][d2-1::3]
-            val_pw = pw_values['pws'][:,:,:,d2-1]
-            return val[base]+val_pw[0,base,index_dict[marker]]
-    m.pw_meas = pyo.Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_pw_measurements)
+            pw_values = pw_data[c-1][(n-1)+start_frame]
+            val_pw = pw_values["pws"][:,:,:,d2-1]
+            return val[base] + val_pw[0, base, index_dict[marker]]
+    m.meas = pyo.Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_measurements)
 
     # Generate dataframe with the measurements that are used in the optimisation.
     # This allows for inspection of the normal and pairwise predictions used in the FTE.
@@ -440,8 +433,8 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
             for n in m.N:
                 included_measurements.append([])
                 for l in m.L:
-                    if m.meas_pw_err_weight[n, c, l, w] != 0.0:
-                        included_measurements[n-1].append([m.pw_meas[n, c, l, 1, w], m.pw_meas[n, c, l, 2, w]])
+                    if m.meas_err_weight[n, c, l, w] != 0.0:
+                        included_measurements[n-1].append([m.meas[n, c, l, 1, w], m.meas[n, c, l, 2, w]])
                     else:
                         included_measurements[n-1].append([float("NaN"), float("NaN")])
             measurements = np.array(included_measurements)
@@ -457,8 +450,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     m.ddx = pyo.Var(m.N, m.P) #acceleration
     m.poses = pyo.Var(m.N, m.L, m.D3)
     m.slack_model = pyo.Var(m.N, m.P)
-    # m.slack_meas = Var(m.N, m.C, m.L, m.D2, initialize=0.0)
-    m.slack_pw_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
+    m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
@@ -524,19 +516,12 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     m.constant_acc = pyo.Constraint(m.N, m.P, rule = constant_acc)
 
     # MEASUREMENT
-    def measurement_constraints(m, n, c, l, d2):
+    def measurement_constraints(m, n, c, l, d2, w):
         #project
         K, D, R, t = K_arr[c-1], D_arr[c-1], R_arr[c-1], t_arr[c-1]
         x, y, z = m.poses[n,l,1], m.poses[n,l,2], m.poses[n,l,3]
-        return proj_funcs[d2-1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2] - m.slack_meas[n, c, l, d2] == 0.0
-    # m.measurement = Constraint(m.N, m.C, m.L, m.D2, rule = measurement_constraints)
-
-    def pw_measurement_constraints(m, n, c, l, d2, w):
-        #project
-        K, D, R, t = K_arr[c-1], D_arr[c-1], R_arr[c-1], t_arr[c-1]
-        x, y, z = m.poses[n,l,1], m.poses[n,l,2], m.poses[n,l,3]
-        return proj_funcs[d2-1](x, y, z, K, D, R, t) - m.pw_meas[n, c, l, d2, w] - m.slack_pw_meas[n, c, l, d2, w] == 0.0
-    m.pw_measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule = pw_measurement_constraints)
+        return proj_funcs[d2-1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
+    m.measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule = measurement_constraints)
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     #Head
@@ -637,7 +622,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
                     for d2 in m.D2:
                         # slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l] * m.slack_meas[n, c, l, d2], redesc_a, redesc_b, redesc_c)
                         for w in m.W:
-                            slack_meas_err += misc.redescending_loss(m.meas_pw_err_weight[n, c, l, w] * m.slack_pw_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
+                            slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
         return slack_meas_err + slack_model_err
 
     m.obj = pyo.Objective(rule = obj)
@@ -652,10 +637,10 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     # solver options
     opt.options["print_level"] = 5
     opt.options["max_iter"] = 10000
-    opt.options["max_cpu_time"] = 3600
+    opt.options["max_cpu_time"] = 10000
     opt.options["tol"] = 1e-1
     opt.options["OF_print_timing_statistics"] = "yes"
-    opt.options["OF_print_frequency_iter"] = 10
+    opt.options["OF_print_frequency_time"] = 10
     opt.options["OF_hessian_approximation"] = "limited-memory"
     opt.options["linear_solver"] = "ma86"
 
