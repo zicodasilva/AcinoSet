@@ -175,7 +175,7 @@ def create_pose_functions(data_dir):
     # Save the functions to file.
     data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
 
-def run(data_dir, start_frame, end_frame, dlc_thresh):
+def run(data_dir, start_frame, end_frame, dlc_thresh, export_measurements: bool = False):
     logger.info("Prepare data - Start")
     # We use a redescending cost to stop outliers affecting the optimisation negatively
     redesc_a = 3
@@ -421,27 +421,28 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
             return val[base] + val_pw[0, base, index_dict[marker]]
     m.meas = pyo.Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_measurements)
 
-    # Generate dataframe with the measurements that are used in the optimisation.
-    # This allows for inspection of the normal and pairwise predictions used in the FTE.
-    measurement_dir = os.path.join(out_dir, "measurements")
-    os.makedirs(measurement_dir, exist_ok=True)
-    xy_labels = ["x", "y"]
-    pd_index = pd.MultiIndex.from_product([markers, xy_labels], names=["bodyparts", "coords"])
-    for c in m.C:
-        for w in m.W:
-            included_measurements = []
-            for n in m.N:
-                included_measurements.append([])
-                for l in m.L:
-                    if m.meas_err_weight[n, c, l, w] != 0.0:
-                        included_measurements[n-1].append([m.meas[n, c, l, 1, w], m.meas[n, c, l, 2, w]])
-                    else:
-                        included_measurements[n-1].append([float("NaN"), float("NaN")])
-            measurements = np.array(included_measurements)
-            n_frames = len(measurements)
-            df = pd.DataFrame(measurements.reshape((n_frames, -1)), columns=pd_index, index=range(start_frame, start_frame+n_frames))
-            # df.to_csv(os.path.join(OUT_DIR, "measurements", f"cam{c}_fte.csv"))
-            df.to_hdf(os.path.join(measurement_dir, f"cam{c}_pw_{w}.h5"), "df_with_missing", format="table", mode="w")
+    if export_measurements:
+        # Generate dataframe with the measurements that are used in the optimisation.
+        # This allows for inspection of the normal and pairwise predictions used in the FTE.
+        measurement_dir = os.path.join(out_dir, "measurements")
+        os.makedirs(measurement_dir, exist_ok=True)
+        xy_labels = ["x", "y"]
+        pd_index = pd.MultiIndex.from_product([markers, xy_labels], names=["bodyparts", "coords"])
+        for c in m.C:
+            for w in m.W:
+                included_measurements = []
+                for n in m.N:
+                    included_measurements.append([])
+                    for l in m.L:
+                        if m.meas_err_weight[n, c, l, w] != 0.0:
+                            included_measurements[n-1].append([m.meas[n, c, l, 1, w], m.meas[n, c, l, 2, w]])
+                        else:
+                            included_measurements[n-1].append([float("NaN"), float("NaN")])
+                measurements = np.array(included_measurements)
+                n_frames = len(measurements)
+                df = pd.DataFrame(measurements.reshape((n_frames, -1)), columns=pd_index, index=range(start_frame, start_frame+n_frames))
+                # df.to_csv(os.path.join(OUT_DIR, "measurements", f"cam{c}_fte.csv"))
+                df.to_hdf(os.path.join(measurement_dir, f"cam{c}_pw_{w}.h5"), "df_with_missing", format="table", mode="w")
 
     logger.info("Measurement initialisation...Done")
     # ===== VARIABLES =====
