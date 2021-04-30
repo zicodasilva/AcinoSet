@@ -6,15 +6,15 @@ Daniel Joska, Liam Clark, Naoya Muramatsu, Ricardo Jericevich, Fred Nicolls, Ale
  AcinoSet is a dataset of free-running cheetahs in the wild that contains 119,490 frames of multi-view synchronized high-speed video footage, camera calibration files and 7,588 human-annotated frames. We utilize markerless animal pose estimation with DeepLabCut to provide 2D keypoints (in the 119K frames). Then, we use three methods that serve as strong baselines for 3D pose estimation tool development: traditional sparse bundle adjustment, an Extended Kalman Filter, and a trajectory optimization-based method we call Full Trajectory Estimation. The resulting 3D trajectories, human-checked 3D ground truth, and an interactive tool to inspect the data is also provided. We believe this dataset will be useful for a diverse range of fields such as ecology, robotics, biomechanics, as well as computer vision.
 
 ### AcinoSet code by:
-- [Liam Clark](https://github.com/LiamClarkZA) | [Ricky Jericevich](https://github.com/@rickyjericevich) | [Daniel Joska](https://github.com/DJoska) | [Naoya Muramatsu](https://github.com/DenDen047)
+- [Liam Clark](https://github.com/LiamClarkZA) | [Ricardo Jericevich](https://github.com/@rickyjericevich) | [Daniel Joska](https://github.com/DJoska) | [Naoya Muramatsu](https://github.com/DenDen047)
 
 ## Prerequisites
 
-- Python3, anaconda, code dependencies are within conda env files.
+- Anaconda
+- The dependecies defined in conda_envs/*.yml
 
-## 2D --> 3D Data Pipeline:
+## What we provide: 
 
-### What we provide: 
 - 7,588 [ground truth 2D frames](https://www.dropbox.com/sh/z3uv6pnk7paygph/AAAiJOavquW89uPlz_Jzjtfua?dl=0)
 - 119,490 processed frames with 2D keypoint estimation outputs [(H5 files as in the DLC format, and raw video)](https://www.dropbox.com/sh/kp5kmatbv5cdjx2/AABfJGb7ktVK_L0lybOLQIbJa?dl=0) 
     - this is currently organized by date > animal ID > "run/attempt"
@@ -25,7 +25,7 @@ Daniel Joska, Liam Clark, Naoya Muramatsu, Ricardo Jericevich, Fred Nicolls, Ale
 
 The following sections document how this was created by the code within this repo:
 
-#### Pre-trained DeepLabCut Model:
+### Pre-trained DeepLabCut Model:
 
 - You can use the `full_cheetah` model provided in the [DLC Model Zoo](http://modelzoo.deeplabcut.org) to re-create the existing H5 files (or on new videos). 
 - Here, we also already provide the videos and H5 outputs of all frames, [here](https://www.dropbox.com/sh/kp5kmatbv5cdjx2/AABfJGb7ktVK_L0lybOLQIbJa?dl=0).
@@ -37,7 +37,7 @@ If you want to label more cheetah data, you can also do so within the [DeepLabCu
 $ conda env create -f conda_envs/DLC.yml -n DLC
 ```
 
-### AcinoSet Setup:
+## AcinoSet Setup:
 
 Navigate to the AcinoSet folder and build the environment:
 ```sh
@@ -49,15 +49,15 @@ Launch Jupyter Lab:
 $ jupyter lab
 ```
 
-### Camera Calibration and 3D Reconstruction:
+## Camera Calibration and 3D Reconstruction:
 
-#### Intrinsic & Extrinsic Calibration:
+### Intrinsic and Extrinsic Calibration:
 
-Run `calib_with_gui.ipynb`, and follow the instructions.
+Open `calib_with_gui.ipynb` and follow the instructions.
 
 Alternatively, if the checkerboard points detected in `calib_with_gui.ipynb` are unsatisfactory, open `saveMatlabPointsForAcinoSet.m` in MATLAB and follow the instructions. Note that this requires MATLAB 2020b or later.
 
-##### Optionally: Manually Defining the Shared Points for extrinsic calibration:
+#### Optionally: Manually defining the shared points for extrinsic calibration:
 
 You can manually define points on each video in a scene with [Argus](http://argus.web.unc.edu/) Clicker. A quick tutorial is found [here](http://argus.web.unc.edu/tutorial/#Clicker).
 
@@ -84,11 +84,33 @@ $ python argus_converter.py \
     --data_dir ../data/2019_03_07/extrinsic_calib/argus_folder
 ```
 
-### Trajectory Optimisation:
+### 3D Reconstruction:
 
-You can run all types of optimisations in one go:
+To reconstruct a cheetah into 3D, we offer three different pose estimation options on top of standard triangulation (TRI):
+
+-  Sparse Bundle Adjustment (SBA)
+-  Extended Kalman Filter (EKF)
+-  Full Trajectory Estimation (FTE)
+
+You can run each option seperately. For example, simply open `FTE.ipynb` and follow the instructions!
+Otherwise, you can run all types of refinements in one go:
 ```sh
 python all_optimizations.py --data_dir 2019_03_09/lily/run --start_frame 70 --end_frame 170 --dlc_thresh 0.5
 ```
 
-Otherwise, you can run each optimisation seperately. For example, simply open `FTE.ipynb` and follow the instructions!
+**NB**: When running the FTE, we recommend that you use the MA86 solver. For details on how to set this up, see [these instructions](https://github.com/African-Robotics-Unit/docs/blob/main/linear-solvers.md).
+
+### Citation 
+
+We ask that if you use our code or data, kindly cite (and note it is accepted to **ICRA 2021**, so please check back for an updated ref):
+
+```
+@misc{joska2021acinoset,
+      title={AcinoSet: A 3D Pose Estimation Dataset and Baseline Models for Cheetahs in the Wild}, 
+      author={Daniel Joska and Liam Clark and Naoya Muramatsu and Ricardo Jericevich and Fred Nicolls and Alexander Mathis and Mackenzie W. Mathis and Amir Patel},
+      year={2021},
+      eprint={2103.13282},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+```
