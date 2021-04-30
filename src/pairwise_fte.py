@@ -689,7 +689,4 @@ def run(data_dir, start_frame, end_frame, dlc_thresh):
     app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
     app.save_3d_cheetah_as_2d(positions, out_dir, scene_fpath, markers, project_points_fisheye, start_frame)
 
-    video_fpaths = sorted(glob(os.path.join(os.path.dirname(out_dir), 'cam[1-9].mp4'))) # original vids should be in the parent dir
-    app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
-
     logger.info("Done")
