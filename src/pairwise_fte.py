@@ -175,7 +175,7 @@ def create_pose_functions(data_dir):
     # Save the functions to file.
     data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
 
-def run(data_dir, start_frame, end_frame, dlc_thresh, export_measurements: bool = False):
+def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, out_dir_prefix: str = None, export_measurements: bool = False):
     logger.info("Prepare data - Start")
     # We use a redescending cost to stop outliers affecting the optimisation negatively
     redesc_a = 3
@@ -184,8 +184,13 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, export_measurements: bool 
 
     t0 = time()
 
+    if out_dir_prefix:
+        out_dir = os.path.join(out_dir_prefix, data_dir, "fte_pw")
+    else:
+        out_dir = os.path.join(root_dir, data_dir, "fte_pw")
+
+    data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
-    out_dir = os.path.join(data_dir, "fte_pw")
     dlc_dir = os.path.join(data_dir, "dlc_pw")
     assert os.path.exists(dlc_dir)
     os.makedirs(out_dir, exist_ok=True)
@@ -204,7 +209,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, export_measurements: bool 
 
     logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
     ## ========= POSE FUNCTIONS ========
-    pose_to_3d, pos_funcs = data_ops.load_data("../data/pose_3d_functions.pickle")
+    pose_to_3d, pos_funcs = data_ops.load_data(os.path.join(root_dir, "pose_3d_functions.pickle"))
 
     # ========= PROJECTION FUNCTIONS ========
     def pt3d_to_2d(x, y, z, K, D, R, t):
@@ -632,7 +637,7 @@ def run(data_dir, start_frame, end_frame, dlc_thresh, export_measurements: bool 
     # RUN THE SOLVER
     opt = SolverFactory(
         'ipopt',
-        # executable='/home/zico/lib/ipopt/build/bin/ipopt'
+        executable='/home/zico/lib/ipopt/build/bin/ipopt'
     )
 
     # solver options
