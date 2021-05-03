@@ -315,10 +315,11 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # R_pw[0, :] = 5
     # R_pw[1, :] = 10
     # R_pw[2, :] = 15
+    # TODO: I have placed dummy variables for the paw pose variances.
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
         13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
-        9, 18, 43, 53, 90, 118, 247, 186, 194, 164, 295, 243, 334, 149, 200, 200, 200, 200, # theta_1, ... , theta_n
+        9, 18, 43, 53, 90, 118, 247, 186, 194, 164, 295, 243, 334, 149, 250, 250, 250, 250, # theta_1, ... , theta_n
         26, 12, 0, 34, 43, 51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 # psi_1, ... , psi_n
     #     ?, ?, ? # lure's x, y, z variance
     ]
