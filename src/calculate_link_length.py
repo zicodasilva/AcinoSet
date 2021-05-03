@@ -14,6 +14,15 @@ def determine_link_distance(scene_file: str, cam_a: int, cam_b: int, cam_a_point
     return distance
 
 if __name__ == "__main__":
+    """
+    Simple function that calculates the distance between two locations (joints in this case) from two different views.
+    In particular this calculates the distance between the ankle and paw on the cheetah. The following frames (from the labelled dataset) were used:
+        - 2019_03_03/Menya/Run1: Frame 068 from CAM3 and CAM2. Measured the r_back and r_front.
+        - 2019_03_03/Phantom/Run1: Frame 104 from CAM1 and CAM2. Measured the r_back and r_front.
+        - 2019_03_05/Jules/Run1: Frame 091 from CAM1 and CAM2. Measured the r_back and r_front.
+
+    The pixel locations for each of the points used are shown below.
+    """
     scene_file_1 = "/Users/zico/msc/dev/AcinoSet/data/2019_03_03/extrinsic_calib/4_cam_scene_sba.json"
     scene_file_2 = "/Users/zico/msc/dev/AcinoSet/data/2019_03_05/extrinsic_calib/6_cam_scene_sba.json"
 
