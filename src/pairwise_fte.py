@@ -73,7 +73,7 @@ def create_pose_functions(data_dir):
             [0, 0, 1]
         ])
 
-    L = 14  # number of joints in the cheetah model
+    L = 18  # number of joints in the cheetah model
 
     # defines arrays of angles, velocities and accelerations
     phi     = [sp.symbols(f"\\phi_{{{l}}}")   for l in range(L)]
@@ -109,6 +109,14 @@ def create_pose_functions(data_dir):
     R12_I = RI_12.T
     RI_13 = rot_y(theta[13]) @ RI_12 # r_back_knee
     R13_I = RI_13.T
+    RI_14 = rot_y(theta[14]) @ RI_7 # l_front_ankle
+    R14_I = RI_14.T
+    RI_15 = rot_y(theta[15]) @ RI_9 # r_front_ankle
+    R15_I = RI_15.T
+    RI_16 = rot_y(theta[16]) @ RI_11 # l_back_ankle
+    R16_I = RI_16.T
+    RI_17 = rot_y(theta[17]) @ RI_13 # r_front_ankle
+    R17_I = RI_17.T
 
     # defines the position, velocities and accelerations in the inertial frame
     x,   y,   z   = sp.symbols("x y z")
@@ -134,18 +142,22 @@ def create_pose_functions(data_dir):
     p_l_shoulder    = p_neck_base    + R2_I  @ sp.Matrix([-0.04, 0.08, -0.10])
     p_l_front_knee  = p_l_shoulder   + R6_I  @ sp.Matrix([0, 0, -0.24])
     p_l_front_ankle = p_l_front_knee + R7_I  @ sp.Matrix([0, 0, -0.28])
+    p_l_front_paw = p_l_front_ankle + R14_I  @ sp.Matrix([0, 0, -0.14])
 
     p_r_shoulder    = p_neck_base    + R2_I  @ sp.Matrix([-0.04, -0.08, -0.10])
     p_r_front_knee  = p_r_shoulder   + R8_I  @ sp.Matrix([0, 0, -0.24])
     p_r_front_ankle = p_r_front_knee + R9_I  @ sp.Matrix([0, 0, -0.28])
+    p_r_front_paw = p_r_front_ankle + R15_I  @ sp.Matrix([0, 0, -0.14])
 
     p_l_hip         = p_tail_base    + R3_I  @ sp.Matrix([0.12, 0.08, -0.06])
     p_l_back_knee   = p_l_hip        + R10_I @ sp.Matrix([0, 0, -0.32])
     p_l_back_ankle  = p_l_back_knee  + R11_I @ sp.Matrix([0, 0, -0.25])
+    p_l_back_paw  = p_l_back_ankle  + R16_I @ sp.Matrix([0, 0, -0.22])
 
     p_r_hip         = p_tail_base    + R3_I  @ sp.Matrix([0.12, -0.08, -0.06])
     p_r_back_knee   = p_r_hip        + R12_I @ sp.Matrix([0, 0, -0.32])
     p_r_back_ankle  = p_r_back_knee  + R13_I @ sp.Matrix([0, 0, -0.25])
+    p_r_back_paw  = p_r_back_ankle  + R17_I @ sp.Matrix([0, 0, -0.22])
 
     # p_lure          = sp.Matrix([x_l, y_l, z_l])
 
@@ -154,10 +166,10 @@ def create_pose_functions(data_dir):
         p_l_eye.T, p_r_eye.T, p_nose.T,
         p_neck_base.T, p_spine.T,
         p_tail_base.T, p_tail_mid.T, p_tail_tip.T,
-        p_l_shoulder.T, p_l_front_knee.T, p_l_front_ankle.T,
-        p_r_shoulder.T, p_r_front_knee.T, p_r_front_ankle.T,
-        p_l_hip.T, p_l_back_knee.T, p_l_back_ankle.T,
-        p_r_hip.T, p_r_back_knee.T, p_r_back_ankle.T,
+        p_l_shoulder.T, p_l_front_knee.T, p_l_front_ankle.T, p_l_front_paw.T,
+        p_r_shoulder.T, p_r_front_knee.T, p_r_front_ankle.T, p_r_front_paw.T,
+        p_l_hip.T, p_l_back_knee.T, p_l_back_ankle.T, p_l_back_paw.T,
+        p_r_hip.T, p_r_back_knee.T, p_r_back_ankle.T, p_r_back_paw.T
     #     p_lure.T
     ])
 
@@ -173,9 +185,9 @@ def create_pose_functions(data_dir):
         pos_funcs.append(lamb)
 
     # Save the functions to file.
-    data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
+    data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_paws_included.pickle"), (pose_to_3d, pos_funcs))
 
-def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, out_dir_prefix: str = None, export_measurements: bool = False):
+def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, auto_frame_select: bool = True, out_dir_prefix: str = None, export_measurements: bool = False):
     logger.info("Prepare data - Start")
     # We use a redescending cost to stop outliers affecting the optimisation negatively
     redesc_a = 3
@@ -185,9 +197,9 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     t0 = time()
 
     if out_dir_prefix:
-        out_dir = os.path.join(out_dir_prefix, data_dir, "fte_pw")
+        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw")
     else:
-        out_dir = os.path.join(root_dir, data_dir, "fte_pw")
+        out_dir = os.path.join(root_dir, data_path, "fte_pw")
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
@@ -200,16 +212,23 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # load video info
     res, fps, tot_frames, _ = app.get_vid_info(data_dir) # path to original videos
     assert end_frame <= tot_frames, f"end_frame must be less than or equal to {tot_frames}"
-    end_frame = tot_frames if end_frame == -1 else end_frame
+    if auto_frame_select:
+        # Obtain the "best" 100 frames by taking the middle set of frames.
+        middle_frame = tot_frames // 2
+        end_frame = middle_frame + 50 if (tot_frames - middle_frame) > 50 else tot_frames
+        start_frame = middle_frame - 50 if middle_frame > 50 else 0
+    else:
+        # Manually obtain the start and end frames.
+        end_frame = tot_frames + (end_frame + 1) if end_frame < 0 else end_frame
+        start_frame -= 1    # 0 based indexing
 
-    start_frame -= 1    # 0 based indexing
     assert start_frame >= 0
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
 
     logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
     ## ========= POSE FUNCTIONS ========
-    pose_to_3d, pos_funcs = data_ops.load_data(os.path.join(root_dir, "pose_3d_functions.pickle"))
+    pose_to_3d, pos_funcs = data_ops.load_data(os.path.join(root_dir, "pose_3d_paws_included.pickle"))
 
     # ========= PROJECTION FUNCTIONS ========
     def pt3d_to_2d(x, y, z, K, D, R, t):
@@ -275,32 +294,32 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         3.47, # r_shoulder
         2.75, # r_front_knee
         2.69, # r_front_ankle
-        # 2.24, # r_front_paw
+        2.24, # r_front_paw
         3.4, # l_shoulder
         2.91, # l_front_knee
         2.85, # l_front_ankle
-        # 2.27, # l_front_paw
+        2.27, # l_front_paw
         3.26, # r_hip
         2.76, # r_back_knee
         2.33, # r_back_ankle
-        # 2.4, # r_back_paw
+        2.4, # r_back_paw
         3.53, # l_hip
         2.69, # l_back_knee
         2.49, # l_back_ankle
-        # 2.34, # l_back_paw
+        2.34, # l_back_paw
     ], dtype=np.float64)
     # R_pw = np.array([R, [5.13, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.43, 5.39, 6.34, 6.53, 6.14, 6.54, 5.35, 5.33, 6.24, 6.91, 5.8, 6.6],
     # [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=np.float64)
-    R_pw = np.array([R, [2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 5.18, 5.28, 5.5, 4.7, 4.7, 5.21, 5.1, 5.27, 5.75],
-    [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 8.83, 6.52, 6.22, 6.8, 6.12, 5.37, 7.83, 6.44, 6.1]], dtype=np.float64)
+    R_pw = np.array([R, [2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 4.85, 5.18, 5.28, 5.5, 4.9, 4.7, 4.7, 5.21, 5.11, 5.1, 5.27, 5.75, 5.44],
+    [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 6.18, 8.83, 6.52, 6.22, 6.34, 6.8, 6.12, 5.37, 5.98, 7.83, 6.44, 6.1, 6.38]], dtype=np.float64)
     # R_pw[0, :] = 5
     # R_pw[1, :] = 10
     # R_pw[2, :] = 15
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
-        13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
-        9, 18, 43, 53, 90, 118, 247, 186, 194, 164, 295, 243, 334, 149, # theta_1, ... , theta_n
-        26, 12, 0, 34, 43, 51, 0, 0, 0, 0, 0, 0, 0, 0, # psi_1, ... , psi_n
+        13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
+        9, 18, 43, 53, 90, 118, 247, 186, 194, 164, 295, 243, 334, 149, 200, 200, 200, 200, # theta_1, ... , theta_n
+        26, 12, 0, 34, 43, 51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 # psi_1, ... , psi_n
     #     ?, ?, ? # lure's x, y, z variance
     ]
     Q = np.array(Q, dtype=np.float64)**2
@@ -338,7 +357,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     m = pyo.ConcreteModel(name = "Cheetah from measurements")
     m.Ts = Ts
     # ===== SETS =====
-    P = 3 + 3 * 14 # + 3  # number of pose parameters (x, y, z, phi_1..n, theta_1..n, psi_1..n, x_l, y_l, z_l)
+    P = 3 + 3 * 18 # + 3  # number of pose parameters (x, y, z, phi_1..n, theta_1..n, psi_1..n, x_l, y_l, z_l)
     L = len(markers) # number of dlc labels per frame
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
@@ -353,19 +372,24 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     m.D3 = pyo.RangeSet(D3)
     m.W = pyo.RangeSet(W)
 
-    # Base measurments. TODO: This is not technically required but it is a lot faster than using pandas for querying data.
+    # Obtain base and pairwise measurments. TODO: This is not technically required for the base measurements but it is a lot faster than using pandas for querying data.
     data = {}
+    pw_data = {}
     cam_idx = 0
     for path in df_paths:
         dlc_df = pd.read_hdf(path)
         pose_array = dlc_df.droplevel([0], axis=1).to_numpy()
         data[cam_idx] = pose_array
+        # Pairwise correspondence data.
+        h5_filename = os.path.basename(path)
+        pw_data[cam_idx] = data_ops.load_data(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
         cam_idx += 1
 
     # Pairwise correspondence.
-    pw_data = {}
-    for cam in range(C):
-        pw_data[cam] = data_ops.load_data(os.path.join(dlc_dir, f"cam{cam+1}-predictions.pickle"))
+    # pw_data = {}
+    # for cam in range(C):
+    #     pw_data[cam] = data_ops.load_data(os.path.join(dlc_dir, f"cam{cam+1}-predictions.pickle"))
+
 
     index_dict = {"nose":23, "r_eye":0, "l_eye":1, "neck_base":24, "spine":6, "tail_base":22, "tail1":11,
      "tail2":12, "l_shoulder":13,"l_front_knee":14,"l_front_ankle":15, "l_front_paw": 16, "r_shoulder":2,
@@ -463,7 +487,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     init_x[:,0] = x_est[start_frame: start_frame+N] #x # change this to [start_frame: end_frame]?
     init_x[:,1] = y_est[start_frame: start_frame+N] #y
     init_x[:,2] = z_est[start_frame: start_frame+N] #z
-    init_x[:,31] = psi_est # yaw = psi
+    init_x[:,39] = psi_est # yaw = psi
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
     for n in m.N:
@@ -531,11 +555,11 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     #Head
-    def head_psi_0(m,n):
+    def head_phi_0(m,n):
         return abs(m.x[n,4]) <= np.pi/6
-    m.head_psi_0 = pyo.Constraint(m.N, rule=head_psi_0)
+    m.head_phi_0 = pyo.Constraint(m.N, rule=head_phi_0)
     def head_theta_0(m,n):
-        return abs(m.x[n,18]) <= np.pi/6
+        return abs(m.x[n,22]) <= np.pi/6
     m.head_theta_0 = pyo.Constraint(m.N, rule=head_theta_0)
 
     #Neck
@@ -543,75 +567,87 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         return abs(m.x[n,5]) <= np.pi/6
     m.neck_phi_1 = pyo.Constraint(m.N, rule=neck_phi_1)
     def neck_theta_1(m,n):
-        return abs(m.x[n,19]) <= np.pi/6
+        return abs(m.x[n,23]) <= np.pi/6
     m.neck_theta_1 = pyo.Constraint(m.N, rule=neck_theta_1)
     def neck_psi_1(m,n):
-        return abs(m.x[n,33]) <= np.pi/6
+        return abs(m.x[n,41]) <= np.pi/6
     m.neck_psi_1 = pyo.Constraint(m.N, rule=neck_psi_1)
 
     #Front torso
     def front_torso_theta_2(m,n):
-        return abs(m.x[n,20]) <= np.pi/6
+        return abs(m.x[n,24]) <= np.pi/6
     m.front_torso_theta_2 = pyo.Constraint(m.N, rule=front_torso_theta_2)
 
     #Back torso
     def back_torso_theta_3(m,n):
-        return abs(m.x[n,21]) <= np.pi/6
+        return abs(m.x[n,25]) <= np.pi/6
     m.back_torso_theta_3 = pyo.Constraint(m.N, rule=back_torso_theta_3)
     def back_torso_phi_3(m,n):
         return abs(m.x[n,7]) <= np.pi/6
     m.back_torso_phi_3 = pyo.Constraint(m.N, rule=back_torso_phi_3)
     def back_torso_psi_3(m,n):
-        return abs(m.x[n,35]) <= np.pi/6
+        return abs(m.x[n,43]) <= np.pi/6
     m.back_torso_psi_3 = pyo.Constraint(m.N, rule=back_torso_psi_3)
 
     #Tail base
     def tail_base_theta_4(m,n):
-        return abs(m.x[n,22]) <= np.pi/1.5
+        return abs(m.x[n,26]) <= np.pi/1.5
     m.tail_base_theta_4 = pyo.Constraint(m.N, rule=tail_base_theta_4)
     def tail_base_psi_4(m,n):
-        return abs(m.x[n,36]) <= np.pi/1.5
+        return abs(m.x[n,44]) <= np.pi/1.5
     m.tail_base_psi_4 = pyo.Constraint(m.N, rule=tail_base_psi_4)
 
     #Tail mid
     def tail_mid_theta_5(m,n):
-        return abs(m.x[n,23]) <= np.pi/1.5
+        return abs(m.x[n,27]) <= np.pi/1.5
     m.tail_mid_theta_5 = pyo.Constraint(m.N, rule=tail_mid_theta_5)
     def tail_mid_psi_5(m,n):
-        return abs(m.x[n,37]) <= np.pi/1.5
+        return abs(m.x[n,45]) <= np.pi/1.5
     m.tail_mid_psi_5 = pyo.Constraint(m.N, rule=tail_mid_psi_5)
 
     #Front left leg
     def l_shoulder_theta_6(m,n):
-        return abs(m.x[n,24]) <= np.pi/2
+        return abs(m.x[n,28]) <= np.pi*0.75
     m.l_shoulder_theta_6 = pyo.Constraint(m.N, rule=l_shoulder_theta_6)
     def l_front_knee_theta_7(m,n):
-        return abs(m.x[n,25] + np.pi/2) <= np.pi/2
+        return abs(m.x[n,29] + np.pi/2) <= np.pi/2
     m.l_front_knee_theta_7 = pyo.Constraint(m.N, rule=l_front_knee_theta_7)
+    def l_front_ankle_theta_14(m,n):
+        return abs(m.x[n,36] - np.pi/2) <= np.pi/2
+    m.l_front_ankle_theta_14 = pyo.Constraint(m.N, rule=l_front_ankle_theta_14)
 
     #Front right leg
     def r_shoulder_theta_8(m,n):
-        return abs(m.x[n,26]) <= np.pi/2
+        return abs(m.x[n,30]) <= np.pi*0.75
     m.r_shoulder_theta_8 = pyo.Constraint(m.N, rule=r_shoulder_theta_8)
     def r_front_knee_theta_9(m,n):
-        return abs(m.x[n,27] + np.pi/2) <= np.pi/2
+        return abs(m.x[n,31] + np.pi/2) <= np.pi/2
     m.r_front_knee_theta_9 = pyo.Constraint(m.N, rule=r_front_knee_theta_9)
+    def r_front_ankle_theta_15(m,n):
+        return abs(m.x[n,37] - np.pi/2) <= np.pi/2
+    m.r_front_ankle_theta_15 = pyo.Constraint(m.N, rule=r_front_ankle_theta_15)
 
     #Back left leg
     def l_hip_theta_10(m,n):
-        return abs(m.x[n,28]) <= np.pi/2
+        return abs(m.x[n,32]) <= np.pi*0.75
     m.l_hip_theta_10 = pyo.Constraint(m.N, rule=l_hip_theta_10)
     def l_back_knee_theta_11(m,n):
-        return abs(m.x[n,29] - np.pi/2) <= np.pi/2
+        return abs(m.x[n,33] - np.pi/2) <= np.pi/2
     m.l_back_knee_theta_11 = pyo.Constraint(m.N, rule=l_back_knee_theta_11)
+    def l_back_ankle_theta_16(m,n):
+        return abs(m.x[n,38] + np.pi/2) <= np.pi/2
+    m.l_back_ankle_theta_16 = pyo.Constraint(m.N, rule=l_back_ankle_theta_16)
 
     #Back right leg
     def r_hip_theta_12(m,n):
-        return abs(m.x[n,30]) <= np.pi/2
+        return abs(m.x[n,34]) <= np.pi*0.75
     m.r_hip_theta_12 = pyo.Constraint(m.N, rule=r_hip_theta_12)
     def r_back_knee_theta_13(m,n):
-        return abs(m.x[n,31] - np.pi/2) <= np.pi/2
+        return abs(m.x[n,35] - np.pi/2) <= np.pi/2
     m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=r_back_knee_theta_13)
+    def r_back_ankle_theta_17(m,n):
+        return abs(m.x[n,39] + np.pi/2) <= np.pi/2
+    m.r_back_ankle_theta_17 = pyo.Constraint(m.N, rule=r_back_ankle_theta_17)
 
     logger.info("Constaint initialisation...Done")
     # ======= OBJECTIVE FUNCTION =======
@@ -637,7 +673,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # RUN THE SOLVER
     opt = SolverFactory(
         'ipopt',
-        executable='/home/zico/lib/ipopt/build/bin/ipopt'
+        # executable='/home/zico/lib/ipopt/build/bin/ipopt'
     )
 
     # solver options
