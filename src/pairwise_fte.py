@@ -175,7 +175,7 @@ def create_pose_functions(data_dir):
     # Save the functions to file.
     data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
 
-def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, out_dir_prefix: str = None, export_measurements: bool = False):
+def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, auto_frame_select: bool = True, out_dir_prefix: str = None, export_measurements: bool = False):
     logger.info("Prepare data - Start")
     # We use a redescending cost to stop outliers affecting the optimisation negatively
     redesc_a = 3
@@ -185,9 +185,9 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     t0 = time()
 
     if out_dir_prefix:
-        out_dir = os.path.join(out_dir_prefix, data_dir, "fte_pw")
+        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw")
     else:
-        out_dir = os.path.join(root_dir, data_dir, "fte_pw")
+        out_dir = os.path.join(root_dir, data_path, "fte_pw")
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
@@ -200,9 +200,16 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # load video info
     res, fps, tot_frames, _ = app.get_vid_info(data_dir) # path to original videos
     assert end_frame <= tot_frames, f"end_frame must be less than or equal to {tot_frames}"
-    end_frame = tot_frames if end_frame == -1 else end_frame
+    if auto_frame_select:
+        # Obtain the "best" 100 frames by taking the middle set of frames.
+        middle_frame = tot_frames // 2
+        end_frame = middle_frame + 50 if (tot_frames - middle_frame) > 50 else tot_frames
+        start_frame = middle_frame - 50 if middle_frame > 50 else 0
+    else:
+        # Manually obtain the start and end frames.
+        end_frame = tot_frames + (end_frame + 1) if end_frame < 0 else end_frame
+        start_frame -= 1    # 0 based indexing
 
-    start_frame -= 1    # 0 based indexing
     assert start_frame >= 0
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
@@ -293,7 +300,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=np.float64)
     R_pw = np.array([R, [2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 5.18, 5.28, 5.5, 4.7, 4.7, 5.21, 5.1, 5.27, 5.75],
     [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 8.83, 6.52, 6.22, 6.8, 6.12, 5.37, 7.83, 6.44, 6.1]], dtype=np.float64)
-    # R_pw[0, :] = 5
+    R_pw[0, :] = 5
     # R_pw[1, :] = 10
     # R_pw[2, :] = 15
     Q = [ # model parameters variance
@@ -343,7 +350,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
-    W = 2  # Number of pairwise terms to include + the base measurement.
+    W = 1  # Number of pairwise terms to include + the base measurement.
 
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
@@ -353,19 +360,24 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     m.D3 = pyo.RangeSet(D3)
     m.W = pyo.RangeSet(W)
 
-    # Base measurments. TODO: This is not technically required but it is a lot faster than using pandas for querying data.
+    # Obtain base and pairwise measurments. TODO: This is not technically required for the base measurements but it is a lot faster than using pandas for querying data.
     data = {}
+    pw_data = {}
     cam_idx = 0
     for path in df_paths:
         dlc_df = pd.read_hdf(path)
         pose_array = dlc_df.droplevel([0], axis=1).to_numpy()
         data[cam_idx] = pose_array
+        # Pairwise correspondence data.
+        h5_filename = os.path.basename(path)
+        pw_data[cam_idx] = data_ops.load_data(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
         cam_idx += 1
 
     # Pairwise correspondence.
-    pw_data = {}
-    for cam in range(C):
-        pw_data[cam] = data_ops.load_data(os.path.join(dlc_dir, f"cam{cam+1}-predictions.pickle"))
+    # pw_data = {}
+    # for cam in range(C):
+    #     pw_data[cam] = data_ops.load_data(os.path.join(dlc_dir, f"cam{cam+1}-predictions.pickle"))
+
 
     index_dict = {"nose":23, "r_eye":0, "l_eye":1, "neck_base":24, "spine":6, "tail_base":22, "tail1":11,
      "tail2":12, "l_shoulder":13,"l_front_knee":14,"l_front_ankle":15, "l_front_paw": 16, "r_shoulder":2,
@@ -459,6 +471,8 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
+    # state_indices = Q > 0
+    # ekf_states = data_ops.load_data(os.path.join(data_dir, "ekf", "ekf.pickle"))
     init_x = np.zeros((N, P))
     init_x[:,0] = x_est[start_frame: start_frame+N] #x # change this to [start_frame: end_frame]?
     init_x[:,1] = y_est[start_frame: start_frame+N] #y
@@ -466,6 +480,9 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     init_x[:,31] = psi_est # yaw = psi
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
+    # init_x[:, state_indices] = ekf_states["x"]
+    # init_dx[:, state_indices] = ekf_states["dx"]
+    # init_ddx[:, state_indices] = ekf_states["ddx"]
     for n in m.N:
         for p in m.P:
             if n<len(init_x): #init using known values
@@ -493,7 +510,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         [pos] = pos_funcs[l-1](*var_list)
         # pos = pose_to_3d(*var_list)[l-1]
         return pos[d3-1] == m.poses[n,l,d3]
-
     m.pose_constraint = pyo.Constraint(m.N, m.L, m.D3, rule=pose_constraint)
 
     # INTEGRATION
@@ -583,7 +599,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     #Front left leg
     def l_shoulder_theta_6(m,n):
-        return abs(m.x[n,24]) <= np.pi/2
+        return abs(m.x[n,24]) <= np.pi*0.75
     m.l_shoulder_theta_6 = pyo.Constraint(m.N, rule=l_shoulder_theta_6)
     def l_front_knee_theta_7(m,n):
         return abs(m.x[n,25] + np.pi/2) <= np.pi/2
@@ -591,7 +607,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     #Front right leg
     def r_shoulder_theta_8(m,n):
-        return abs(m.x[n,26]) <= np.pi/2
+        return abs(m.x[n,26]) <= np.pi*0.75
     m.r_shoulder_theta_8 = pyo.Constraint(m.N, rule=r_shoulder_theta_8)
     def r_front_knee_theta_9(m,n):
         return abs(m.x[n,27] + np.pi/2) <= np.pi/2
@@ -599,7 +615,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     #Back left leg
     def l_hip_theta_10(m,n):
-        return abs(m.x[n,28]) <= np.pi/2
+        return abs(m.x[n,28]) <= np.pi*0.75
     m.l_hip_theta_10 = pyo.Constraint(m.N, rule=l_hip_theta_10)
     def l_back_knee_theta_11(m,n):
         return abs(m.x[n,29] - np.pi/2) <= np.pi/2
@@ -607,7 +623,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     #Back right leg
     def r_hip_theta_12(m,n):
-        return abs(m.x[n,30]) <= np.pi/2
+        return abs(m.x[n,30]) <= np.pi*0.75
     m.r_hip_theta_12 = pyo.Constraint(m.N, rule=r_hip_theta_12)
     def r_back_knee_theta_13(m,n):
         return abs(m.x[n,31] - np.pi/2) <= np.pi/2
@@ -629,7 +645,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
                         # slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l] * m.slack_meas[n, c, l, d2], redesc_a, redesc_b, redesc_c)
                         for w in m.W:
                             slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
-        return slack_meas_err + slack_model_err
+        return (slack_meas_err + slack_model_err)/1000
 
     m.obj = pyo.Objective(rule = obj)
 
@@ -637,7 +653,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # RUN THE SOLVER
     opt = SolverFactory(
         'ipopt',
-        executable='/home/zico/lib/ipopt/build/bin/ipopt'
+        # executable='/home/zico/lib/ipopt/build/bin/ipopt'
     )
 
     # solver options
@@ -648,6 +664,8 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     opt.options["OF_print_timing_statistics"] = "yes"
     opt.options["OF_print_frequency_time"] = 10
     opt.options["OF_hessian_approximation"] = "limited-memory"
+    # opt.options["OF_accept_every_trial_step"] = "yes"
+    # opt.options['OF_warm_start_init_point'] = "yes"
     opt.options["linear_solver"] = "ma86"
 
     logger.info("Setup optimisation - End")
