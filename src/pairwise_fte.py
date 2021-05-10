@@ -173,7 +173,7 @@ def create_pose_functions(data_dir):
         pos_funcs.append(lamb)
 
     # Save the functions to file.
-    data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
+    data_ops.save_dill(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
 
 def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, auto_frame_select: bool = True, out_dir_prefix: str = None, export_measurements: bool = False):
     logger.info("Prepare data - Start")
@@ -216,7 +216,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
     ## ========= POSE FUNCTIONS ========
-    pose_to_3d, pos_funcs = data_ops.load_data(os.path.join(root_dir, "pose_3d_functions.pickle"))
+    pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "pose_3d_functions.pickle"))
 
     # ========= PROJECTION FUNCTIONS ========
     def pt3d_to_2d(x, y, z, K, D, R, t):
@@ -295,14 +295,14 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         2.69, # l_back_knee
         2.49, # l_back_ankle
         # 2.34, # l_back_paw
-    ], dtype=np.float64)
+    ], dtype=float)
     # R_pw = np.array([R, [5.13, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.43, 5.39, 6.34, 6.53, 6.14, 6.54, 5.35, 5.33, 6.24, 6.91, 5.8, 6.6],
-    # [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=np.float64)
+    # [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=float)
     R_pw = np.array([R, [2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 5.18, 5.28, 5.5, 4.7, 4.7, 5.21, 5.1, 5.27, 5.75],
-    [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 8.83, 6.52, 6.22, 6.8, 6.12, 5.37, 7.83, 6.44, 6.1]], dtype=np.float64)
-    R_pw[0, :] = 5
-    # R_pw[1, :] = 10
-    # R_pw[2, :] = 15
+    [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 8.83, 6.52, 6.22, 6.8, 6.12, 5.37, 7.83, 6.44, 6.1]], dtype=float)
+    R_pw[0, :] = 5.0
+    # R_pw[1, :] = 10.0
+    # R_pw[2, :] = 15.0
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
         13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
@@ -310,7 +310,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         26, 12, 0, 34, 43, 51, 0, 0, 0, 0, 0, 0, 0, 0, # psi_1, ... , psi_n
     #     ?, ?, ? # lure's x, y, z variance
     ]
-    Q = np.array(Q, dtype=np.float64)**2
+    Q = np.array(Q, dtype=float)**2
 
     #===================================================
     #                   Load in data
@@ -370,7 +370,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         data[cam_idx] = pose_array
         # Pairwise correspondence data.
         h5_filename = os.path.basename(path)
-        pw_data[cam_idx] = data_ops.load_data(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
+        pw_data[cam_idx] = data_ops.load_pickle(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
         cam_idx += 1
 
     # Pairwise correspondence.
@@ -472,7 +472,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     # ===== VARIABLES INITIALIZATION =====
     # state_indices = Q > 0
-    # ekf_states = data_ops.load_data(os.path.join(data_dir, "ekf", "ekf.pickle"))
+    # ekf_states = data_ops.load_pickle(os.path.join(data_dir, "ekf", "ekf.pickle"))
     init_x = np.zeros((N, P))
     init_x[:,0] = x_est[start_frame: start_frame+N] #x # change this to [start_frame: end_frame]?
     init_x[:,1] = y_est[start_frame: start_frame+N] #y
@@ -645,7 +645,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
                         # slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l] * m.slack_meas[n, c, l, d2], redesc_a, redesc_b, redesc_c)
                         for w in m.W:
                             slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
-        return (slack_meas_err + slack_model_err)/1000
+        return 1e-3 * (slack_meas_err + slack_model_err)
 
     m.obj = pyo.Objective(rule = obj)
 
@@ -654,19 +654,20 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     opt = SolverFactory(
         'ipopt',
         # executable='/home/zico/lib/ipopt/build/bin/ipopt'
+        # executable="/tmp/build/bin/ipopt"
     )
 
     # solver options
     opt.options["print_level"] = 5
     opt.options["max_iter"] = 10000
     opt.options["max_cpu_time"] = 10000
-    opt.options["tol"] = 1e-1
+    opt.options["Tol"] = 1e-1
     opt.options["OF_print_timing_statistics"] = "yes"
     opt.options["OF_print_frequency_time"] = 10
     opt.options["OF_hessian_approximation"] = "limited-memory"
-    # opt.options["OF_accept_every_trial_step"] = "yes"
-    # opt.options['OF_warm_start_init_point'] = "yes"
+    opt.options["OF_accept_every_trial_step"] = "yes"
     opt.options["linear_solver"] = "ma86"
+    opt.options['OF_ma86_scaling'] = "none"
 
     logger.info("Setup optimisation - End")
     t1 = time()
