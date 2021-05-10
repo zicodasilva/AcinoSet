@@ -1,4 +1,6 @@
 import os
+import platform
+import json
 import numpy as np
 import sympy as sp
 import pandas as pd
@@ -175,7 +177,7 @@ def create_pose_functions(data_dir):
     # Save the functions to file.
     data_ops.save_dill(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
 
-def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, auto_frame_select: bool = True, out_dir_prefix: str = None, export_measurements: bool = False):
+def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, out_dir_prefix: str = None, generate_reprojection_videos: bool = False, export_measurements: bool = False):
     logger.info("Prepare data - Start")
     # We use a redescending cost to stop outliers affecting the optimisation negatively
     redesc_a = 3
@@ -197,20 +199,65 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     app.start_logging(os.path.join(out_dir, "fte.log"))
 
-    # load video info
-    res, fps, tot_frames, _ = app.get_vid_info(data_dir) # path to original videos
-    assert end_frame <= tot_frames, f"end_frame must be less than or equal to {tot_frames}"
-    if auto_frame_select:
-        # Obtain the "best" 100 frames by taking the middle set of frames.
-        middle_frame = tot_frames // 2
-        end_frame = middle_frame + 50 if (tot_frames - middle_frame) > 50 else tot_frames
-        start_frame = middle_frame - 50 if middle_frame > 50 else 0
-    else:
-        # Manually obtain the start and end frames.
-        end_frame = tot_frames + (end_frame + 1) if end_frame < 0 else end_frame
-        start_frame -= 1    # 0 based indexing
+    # ========= IMPORT CAMERA & SCENE PARAMS ========
+    K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
+    D_arr = D_arr.reshape((-1,4))
 
-    assert start_frame >= 0
+    # load video info
+    res, fps, num_frames = 0, 0, 0
+    if platform.python_implementation() == "CPython":
+        res, fps, num_frames, _ = app.get_vid_info(data_dir)    # path to the directory having original videos
+        assert res == cam_res
+    elif platform.python_implementation() == "PyPy":
+        fps = 120 if "2019" in data_dir else 90
+
+    assert 0 < start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
+    assert 0 != end_frame <= num_frames, f'end_frame must be less than or equal to {num_frames}'
+    assert 0 <= dlc_thresh <= 1, 'dlc_thresh must be from 0 to 1'
+
+    # load DLC data
+    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
+    assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json'
+
+    # load measurement dataframe (pixels, likelihood)
+    points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
+
+    if platform.python_implementation() == "PyPy":
+        # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
+        # So instead I manually get the number of frames and the frame rate based (determined above).
+        num_frames = points_2d_df["frame"].max() + 1
+
+    if end_frame == -1:
+        # Automatically set start and end frame
+        # defining the first and end frame as detecting all the markers on any of cameras simultaneously
+        filtered_points_2d_df = points_2d_df.query(f'likelihood > {dlc_thresh}')    # ignore points with low likelihood
+        target_markers = misc.get_markers()
+        markers_condition = ' or '.join([f'marker=="{ref}"' for ref in target_markers])
+        num_marker = lambda i: len(filtered_points_2d_df.query(f'frame == {i} and ({markers_condition})')['marker'].unique())
+
+        start_frame, end_frame = -1, -1
+        max_idx = filtered_points_2d_df["frame"].max() + 1
+        for i in range(max_idx):
+            if num_marker(i) == len(target_markers):
+                start_frame = i
+                break
+        for i in range(max_idx, 0, -1):
+            if num_marker(i) == len(target_markers):
+                end_frame = i
+                break
+        if start_frame == -1 or end_frame == -1:
+            raise("Setting frames failed. Please define start and end frames manually.")
+    else:
+        # User-defined frames
+        start_frame = start_frame - 1  # 0 based indexing
+        end_frame = end_frame % num_frames + 1 if end_frame == -1 else end_frame
+        filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]    # ignore points with low likelihood
+    assert len(K_arr) == points_2d_df['camera'].nunique()
+
+    # save parameters
+    with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
+        json.dump(dict(start_frame=start_frame, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
+
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
 
@@ -244,10 +291,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     def pt3d_to_y2d(x, y, z, K, D, R, t):
         v = pt3d_to_2d(x, y, z, K, D, R, t)[1]
         return v
-
-    # ========= IMPORT CAMERA & SCENE PARAMS ========
-    K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
-    D_arr = D_arr.reshape((-1,4))
 
     # ========= IMPORT DATA ========
     markers = misc.get_markers()
@@ -712,6 +755,11 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     out_fpath = os.path.join(out_dir, f"fte.pickle")
     app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
-    app.save_3d_cheetah_as_2d(positions, out_dir, scene_fpath, markers, project_points_fisheye, start_frame)
+    app.save_3d_cheetah_as_2d(positions, out_dir, scene_fpath, markers, project_points_fisheye, start_frame, out_fname="fte", vid_dir=data_dir)
+
+    # Create 2D reprojection videos.
+    if generate_reprojection_videos:
+        video_fpaths = sorted(glob(os.path.join(root_dir, data_path, "cam[1-9].mp4"))) # original vids should be in the parent dir
+        app.create_labeled_videos(video_fpaths, out_dir=os.path.join(root_dir, data_path, "fte_pw"), draw_skeleton=True, pcutoff=dlc_thresh)
 
     logger.info("Done")
