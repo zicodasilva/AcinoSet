@@ -6,6 +6,7 @@ import sympy as sp
 import pandas as pd
 from glob import glob
 from time import time
+from tqdm import tqdm
 from scipy.stats import linregress
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
@@ -211,10 +212,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     elif platform.python_implementation() == "PyPy":
         fps = 120 if "2019" in data_dir else 90
 
-    assert 0 < start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
-    assert 0 != end_frame <= num_frames, f'end_frame must be less than or equal to {num_frames}'
-    assert 0 <= dlc_thresh <= 1, 'dlc_thresh must be from 0 to 1'
-
     # load DLC data
     dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
     assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json'
@@ -226,6 +223,10 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
         # So instead I manually get the number of frames and the frame rate based (determined above).
         num_frames = points_2d_df["frame"].max() + 1
+
+    assert 0 < start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
+    assert 0 != end_frame <= num_frames, f'end_frame must be less than or equal to {num_frames}'
+    assert 0 <= dlc_thresh <= 1, 'dlc_thresh must be from 0 to 1'
 
     if end_frame == -1:
         # Automatically set start and end frame
@@ -246,7 +247,11 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
                 end_frame = i
                 break
         if start_frame == -1 or end_frame == -1:
-            raise("Setting frames failed. Please define start and end frames manually.")
+            raise Exception("Setting frames failed. Please define start and end frames manually.")
+    elif start_frame == -1:
+        # Use the entire video.
+        start_frame = 1
+        end_frame = num_frames
     else:
         # User-defined frames
         start_frame = start_frame - 1  # 0 based indexing
@@ -254,12 +259,20 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]    # ignore points with low likelihood
     assert len(K_arr) == points_2d_df['camera'].nunique()
 
+    N = end_frame - start_frame
+    Ts = 1.0 / fps  # timestep
+
+    if N > 200:
+        # Obtain the "best" 100 frames by taking the middle set of frames. NOTE: this is to prevent memory issues with taking
+        # a frame set that is too large.
+        middle_frame = num_frames // 2
+        end_frame = middle_frame + 50 if (num_frames - middle_frame) > 50 else num_frames
+        start_frame = middle_frame - 50 if middle_frame > 50 else 0
+
+
     # save parameters
     with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
         json.dump(dict(start_frame=start_frame, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
-
-    N = end_frame - start_frame
-    Ts = 1.0 / fps  # timestep
 
     logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
     ## ========= POSE FUNCTIONS ========
@@ -760,6 +773,23 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # Create 2D reprojection videos.
     if generate_reprojection_videos:
         video_fpaths = sorted(glob(os.path.join(root_dir, data_path, "cam[1-9].mp4"))) # original vids should be in the parent dir
-        app.create_labeled_videos(video_fpaths, out_dir=os.path.join(root_dir, data_path, "fte_pw"), draw_skeleton=True, pcutoff=dlc_thresh)
+        app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
     logger.info("Done")
+
+if __name__ == '__main__':
+    root_dir = os.path.join("/","data", "dlc", "to_analyse", "cheetah_videos")
+    data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
+    tests = data["test_dirs"]
+
+    t0 = time()
+    logger.info("Run reconstruction on all videos...")
+    for test in tqdm(tests):
+        dir = test.split("/cheetah_videos/")[1]
+        try:
+            run(root_dir, dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
+        except:
+            run(root_dir, dir, start_frame=-1, end_frame=1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
+
+    t1 = time()
+    logger.info(f"Run through all videos took {t1 - t0:.2f}s")

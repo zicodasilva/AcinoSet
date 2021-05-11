@@ -176,13 +176,13 @@ def save_optimised_cheetah(positions, out_fpath, extra_data=None, for_matlab=Fal
 
 
 def save_3d_cheetah_as_2d(positions_3d, out_dir, scene_fpath, bodyparts, project_func, start_frame, save_as_csv=True, out_fname=None, vid_dir=None):
-    assert os.path.dirname(os.path.dirname(scene_fpath)) in out_dir, 'scene_fpath does not belong to the same parent folder as out_dir'
+    # assert os.path.dirname(os.path.dirname(scene_fpath)) in out_dir, 'scene_fpath does not belong to the same parent folder as out_dir'
 
     video_fpaths = sorted(glob(os.path.join(out_dir, 'cam[1-9].mp4'))) # check current dir for videos
     if not video_fpaths:
         video_fpaths = sorted(glob(os.path.join(os.path.dirname(out_dir), 'cam[1-9].mp4'))) # check parent dir for videos
         if not video_fpaths and vid_dir is not None:
-            video_fpaths = sorted(glob(os.path.join(os.path.dirname(vid_dir), 'cam[1-9].mp4'))) # check specific dir for videos
+            video_fpaths = sorted(glob(os.path.join(vid_dir, 'cam[1-9].mp4'))) # check specific dir for videos
 
 
     if video_fpaths:

@@ -1,4 +1,5 @@
 import os
+import platform
 import sys
 import pickle
 import cv2 as cv
@@ -17,8 +18,10 @@ from .calib import calibrate_camera, calibrate_fisheye_camera, \
     triangulate_points, triangulate_points_fisheye, \
     project_points, project_points_fisheye, \
     _calibrate_pairwise_extrinsics
-from .plotting import plot_calib_board, plot_optimized_states, \
-    plot_extrinsics, Cheetah
+
+if platform.python_implementation() == "CPython":
+    from .plotting import plot_calib_board, plot_optimized_states, \
+        plot_extrinsics, Cheetah
 
 
 def extract_corners_from_images(img_dir, out_fpath, board_shape, board_edge_len, window_size=11, remove_unused_images=False):
