@@ -224,7 +224,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         # So instead I manually get the number of frames and the frame rate based (determined above).
         num_frames = points_2d_df["frame"].max() + 1
 
-    assert 0 < start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
+    assert 0 != start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
     assert 0 != end_frame <= num_frames, f'end_frame must be less than or equal to {num_frames}'
     assert 0 <= dlc_thresh <= 1, 'dlc_thresh must be from 0 to 1'
 
@@ -268,7 +268,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         middle_frame = num_frames // 2
         end_frame = middle_frame + 50 if (num_frames - middle_frame) > 50 else num_frames
         start_frame = middle_frame - 50 if middle_frame > 50 else 0
-
+        N = end_frame - start_frame
 
     # save parameters
     with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
