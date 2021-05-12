@@ -786,14 +786,33 @@ if __name__ == '__main__':
     data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = data["test_dirs"]
 
-    t0 = time()
-    logger.info("Run reconstruction on all videos...")
-    for test in tqdm(tests):
-        dir = test.split("/cheetah_videos/")[1]
-        try:
-            run(root_dir, dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
-        except:
-            run(root_dir, dir, start_frame=-1, end_frame=1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
+    if platform.python_implementation() == "PyPy":
+        t0 = time()
+        logger.info("Run reconstruction on all videos...")
+        for test in tqdm(tests):
+            dir = test.split("/cheetah_videos/")[1]
+            try:
+                run(root_dir, dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
+            except:
+                run(root_dir, dir, start_frame=-1, end_frame=1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
 
-    t1 = time()
-    logger.info(f"Run through all videos took {t1 - t0:.2f}s")
+        t1 = time()
+        logger.info(f"Run through all videos took {t1 - t0:.2f}s")
+    elif platform.python_implementation() == "CPython":
+        out_dir_prefix="/data/zico/CheetahResults/auto_frame_select"
+        t0 = time()
+        logger.info("Run 2D reprojections on all videos...")
+        for test in tqdm(tests):
+            dir = test.split("/cheetah_videos/")[1]
+            try:
+                if out_dir_prefix:
+                    out_dir = os.path.join(out_dir_prefix, dir, "fte_pw")
+                else:
+                    out_dir = os.path.join(root_dir, dir, "fte_pw")
+                video_fpaths = sorted(glob(os.path.join(root_dir, dir, "cam[1-9].mp4"))) # original vids should be in the parent dir
+                app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=0.5)
+            except:
+                continue
+
+        t1 = time()
+        logger.info(f"Video generation took {t1 - t0:.2f}s")
