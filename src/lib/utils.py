@@ -228,7 +228,7 @@ def find_scene_file(dir_path, scene_fname=None, verbose=True):
         n_cams = len(glob(os.path.join(dir_path, 'cam[1-9].mp4'))) # reads up to cam9.mp4 only
         scene_fname = f'{n_cams}_cam_scene_sba.json' if n_cams else '[1-9]_cam_scene*.json'
 
-    if dir_path and dir_path != os.path.join('..', 'data'):
+    if dir_path and dir_path != os.path.sep and dir_path != os.path.join('..', 'data'):
         scene_fpath = os.path.join(dir_path, 'extrinsic_calib', scene_fname)
         # ignore [1-9]_cam_scene_before_corrections.json unless specified
         scene_files = sorted([scene_file for scene_file in glob(scene_fpath) if ('before_corrections' not in scene_file) or (scene_file == scene_fpath)])

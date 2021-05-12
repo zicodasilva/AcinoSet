@@ -201,7 +201,11 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     app.start_logging(os.path.join(out_dir, "fte.log"))
 
     # ========= IMPORT CAMERA & SCENE PARAMS ========
-    K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
+    try:
+        K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
+    except:
+        logger.error("Early exit because extrinsic calibration files could not be located")
+        return
     D_arr = D_arr.reshape((-1,4))
 
     # load video info
