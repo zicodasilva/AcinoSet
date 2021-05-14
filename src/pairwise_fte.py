@@ -1,9 +1,12 @@
 import os
+import platform
+import json
 import numpy as np
 import sympy as sp
 import pandas as pd
 from glob import glob
 from time import time
+from tqdm import tqdm
 from scipy.stats import linregress
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
@@ -187,7 +190,7 @@ def create_pose_functions(data_dir):
     # Save the functions to file.
     data_ops.save_sympy_functions(os.path.join(data_dir, "pose_3d_paws_included.pickle"), (pose_to_3d, pos_funcs))
 
-def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, auto_frame_select: bool = True, out_dir_prefix: str = None, export_measurements: bool = False):
+def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, out_dir_prefix: str = None, generate_reprojection_videos: bool = False, export_measurements: bool = False):
     logger.info("Prepare data - Start")
     # We use a redescending cost to stop outliers affecting the optimisation negatively
     redesc_a = 3
@@ -209,22 +212,83 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     app.start_logging(os.path.join(out_dir, "fte.log"))
 
-    # load video info
-    res, fps, tot_frames, _ = app.get_vid_info(data_dir) # path to original videos
-    assert end_frame <= tot_frames, f"end_frame must be less than or equal to {tot_frames}"
-    if auto_frame_select:
-        # Obtain the "best" 100 frames by taking the middle set of frames.
-        middle_frame = tot_frames // 2
-        end_frame = middle_frame + 50 if (tot_frames - middle_frame) > 50 else tot_frames
-        start_frame = middle_frame - 50 if middle_frame > 50 else 0
-    else:
-        # Manually obtain the start and end frames.
-        end_frame = tot_frames + (end_frame + 1) if end_frame < 0 else end_frame
-        start_frame -= 1    # 0 based indexing
+    # ========= IMPORT CAMERA & SCENE PARAMS ========
+    try:
+        K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
+    except:
+        logger.error("Early exit because extrinsic calibration files could not be located")
+        return
+    D_arr = D_arr.reshape((-1,4))
 
-    assert start_frame >= 0
+    # load video info
+    res, fps, num_frames = 0, 0, 0
+    if platform.python_implementation() == "CPython":
+        res, fps, num_frames, _ = app.get_vid_info(data_dir)    # path to the directory having original videos
+        assert res == cam_res
+    elif platform.python_implementation() == "PyPy":
+        fps = 120 if "2019" in data_dir else 90
+
+    # load DLC data
+    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
+    assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json'
+
+    # load measurement dataframe (pixels, likelihood)
+    points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
+
+    if platform.python_implementation() == "PyPy":
+        # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
+        # So instead I manually get the number of frames and the frame rate based (determined above).
+        num_frames = points_2d_df["frame"].max() + 1
+
+    assert 0 != start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
+    assert 0 != end_frame <= num_frames, f'end_frame must be less than or equal to {num_frames}'
+    assert 0 <= dlc_thresh <= 1, 'dlc_thresh must be from 0 to 1'
+
+    if end_frame == -1:
+        # Automatically set start and end frame
+        # defining the first and end frame as detecting all the markers on any of cameras simultaneously
+        filtered_points_2d_df = points_2d_df.query(f'likelihood > {dlc_thresh}')    # ignore points with low likelihood
+        target_markers = misc.get_markers()
+        markers_condition = ' or '.join([f'marker=="{ref}"' for ref in target_markers])
+        num_marker = lambda i: len(filtered_points_2d_df.query(f'frame == {i} and ({markers_condition})')['marker'].unique())
+
+        start_frame, end_frame = -1, -1
+        max_idx = filtered_points_2d_df["frame"].max() + 1
+        for i in range(max_idx):
+            if num_marker(i) == len(target_markers):
+                start_frame = i
+                break
+        for i in range(max_idx, 0, -1):
+            if num_marker(i) == len(target_markers):
+                end_frame = i
+                break
+        if start_frame == -1 or end_frame == -1:
+            raise Exception("Setting frames failed. Please define start and end frames manually.")
+    elif start_frame == -1:
+        # Use the entire video.
+        start_frame = 1
+        end_frame = num_frames
+    else:
+        # User-defined frames
+        start_frame = start_frame - 1  # 0 based indexing
+        end_frame = end_frame % num_frames + 1 if end_frame == -1 else end_frame
+        filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]    # ignore points with low likelihood
+    assert len(K_arr) == points_2d_df['camera'].nunique()
+
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
+
+    if N > 200:
+        # Obtain the "best" 100 frames by taking the middle set of frames. NOTE: this is to prevent memory issues with taking
+        # a frame set that is too large.
+        middle_frame = num_frames // 2
+        end_frame = middle_frame + 50 if (num_frames - middle_frame) > 50 else num_frames
+        start_frame = middle_frame - 50 if middle_frame > 50 else 0
+        N = end_frame - start_frame
+
+    # save parameters
+    with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
+        json.dump(dict(start_frame=start_frame, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
 
     logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
     ## ========= POSE FUNCTIONS ========
@@ -256,10 +320,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     def pt3d_to_y2d(x, y, z, K, D, R, t):
         v = pt3d_to_2d(x, y, z, K, D, R, t)[1]
         return v
-
-    # ========= IMPORT CAMERA & SCENE PARAMS ========
-    K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
-    D_arr = D_arr.reshape((-1,4))
 
     # ========= IMPORT DATA ========
     markers = misc.get_markers()
@@ -306,15 +366,15 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         3.53, # l_hip
         2.69, # l_back_knee
         2.49, # l_back_ankle
-        2.34, # l_back_paw
+        2.34 # l_back_paw
     ], dtype=np.float64)
     # R_pw = np.array([R, [5.13, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.43, 5.39, 6.34, 6.53, 6.14, 6.54, 5.35, 5.33, 6.24, 6.91, 5.8, 6.6],
     # [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=np.float64)
     R_pw = np.array([R, [2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 4.85, 5.18, 5.28, 5.5, 4.9, 4.7, 4.7, 5.21, 5.11, 5.1, 5.27, 5.75, 5.44],
     [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 6.18, 8.83, 6.52, 6.22, 6.34, 6.8, 6.12, 5.37, 5.98, 7.83, 6.44, 6.1, 6.38]], dtype=np.float64)
-    # R_pw[0, :] = 5
-    # R_pw[1, :] = 10
-    # R_pw[2, :] = 15
+    R_pw[0, :] = 5
+    R_pw[1, :] = 10
+    R_pw[2, :] = 15
     # TODO: I have placed dummy variables for the paw pose variances.
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
@@ -323,7 +383,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         26, 12, 0, 34, 43, 51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 # psi_1, ... , psi_n
     #     ?, ?, ? # lure's x, y, z variance
     ]
-    Q = np.array(Q, dtype=np.float64)**2
+    Q = np.array(Q, dtype=float)**2
 
     #===================================================
     #                   Load in data
@@ -363,7 +423,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
-    W = 2  # Number of pairwise terms to include + the base measurement.
+    W = 1  # Number of pairwise terms to include + the base measurement.
 
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
@@ -383,7 +443,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         data[cam_idx] = pose_array
         # Pairwise correspondence data.
         h5_filename = os.path.basename(path)
-        pw_data[cam_idx] = data_ops.load_data(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
+        pw_data[cam_idx] = data_ops.load_pickle(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
         cam_idx += 1
 
     # Pairwise correspondence.
@@ -484,6 +544,8 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
+    # state_indices = Q > 0
+    # ekf_states = data_ops.load_pickle(os.path.join(data_dir, "ekf", "ekf.pickle"))
     init_x = np.zeros((N, P))
     init_x[:,0] = x_est[start_frame: start_frame+N] #x # change this to [start_frame: end_frame]?
     init_x[:,1] = y_est[start_frame: start_frame+N] #y
@@ -491,6 +553,9 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     init_x[:,39] = psi_est # yaw = psi
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
+    # init_x[:, state_indices] = ekf_states["x"]
+    # init_dx[:, state_indices] = ekf_states["dx"]
+    # init_ddx[:, state_indices] = ekf_states["ddx"]
     for n in m.N:
         for p in m.P:
             if n<len(init_x): #init using known values
@@ -518,7 +583,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         [pos] = pos_funcs[l-1](*var_list)
         # pos = pose_to_3d(*var_list)[l-1]
         return pos[d3-1] == m.poses[n,l,d3]
-
     m.pose_constraint = pyo.Constraint(m.N, m.L, m.D3, rule=pose_constraint)
 
     # INTEGRATION
@@ -666,7 +730,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
                         # slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l] * m.slack_meas[n, c, l, d2], redesc_a, redesc_b, redesc_c)
                         for w in m.W:
                             slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
-        return slack_meas_err + slack_model_err
+        return 1e-3 * (slack_meas_err + slack_model_err)
 
     m.obj = pyo.Objective(rule = obj)
 
@@ -681,11 +745,13 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     opt.options["print_level"] = 5
     opt.options["max_iter"] = 10000
     opt.options["max_cpu_time"] = 10000
-    opt.options["tol"] = 1e-1
+    opt.options["Tol"] = 1e-1
     opt.options["OF_print_timing_statistics"] = "yes"
     opt.options["OF_print_frequency_time"] = 10
     opt.options["OF_hessian_approximation"] = "limited-memory"
+    opt.options["OF_accept_every_trial_step"] = "yes"
     opt.options["linear_solver"] = "ma86"
+    opt.options['OF_ma86_scaling'] = "none"
 
     logger.info("Setup optimisation - End")
     t1 = time()
@@ -730,6 +796,47 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     out_fpath = os.path.join(out_dir, f"fte.pickle")
     app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
-    app.save_3d_cheetah_as_2d(positions, out_dir, scene_fpath, markers, project_points_fisheye, start_frame)
+    app.save_3d_cheetah_as_2d(positions, out_dir, scene_fpath, markers, project_points_fisheye, start_frame, out_fname="fte", vid_dir=data_dir)
+
+    # Create 2D reprojection videos.
+    if generate_reprojection_videos:
+        video_fpaths = sorted(glob(os.path.join(root_dir, data_path, "cam[1-9].mp4"))) # original vids should be in the parent dir
+        app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
     logger.info("Done")
+
+if __name__ == '__main__':
+    root_dir = os.path.join("/","data", "dlc", "to_analyse", "cheetah_videos")
+    data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
+    tests = data["test_dirs"]
+
+    if platform.python_implementation() == "PyPy":
+        t0 = time()
+        logger.info("Run reconstruction on all videos...")
+        for test in tqdm(tests):
+            dir = test.split("/cheetah_videos/")[1]
+            try:
+                run(root_dir, dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
+            except:
+                run(root_dir, dir, start_frame=-1, end_frame=1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
+
+        t1 = time()
+        logger.info(f"Run through all videos took {t1 - t0:.2f}s")
+    elif platform.python_implementation() == "CPython":
+        out_dir_prefix="/data/zico/CheetahResults/auto_frame_select"
+        t0 = time()
+        logger.info("Run 2D reprojections on all videos...")
+        for test in tqdm(tests):
+            dir = test.split("/cheetah_videos/")[1]
+            try:
+                if out_dir_prefix:
+                    out_dir = os.path.join(out_dir_prefix, dir, "fte_pw")
+                else:
+                    out_dir = os.path.join(root_dir, dir, "fte_pw")
+                video_fpaths = sorted(glob(os.path.join(root_dir, dir, "cam[1-9].mp4"))) # original vids should be in the parent dir
+                app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=0.5)
+            except:
+                continue
+
+        t1 = time()
+        logger.info(f"Video generation took {t1 - t0:.2f}s")
