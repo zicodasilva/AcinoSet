@@ -178,7 +178,7 @@ def create_pose_functions(data_dir):
     # Save the functions to file.
     data_ops.save_dill(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
 
-def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, out_dir_prefix: str = None, generate_reprojection_videos: bool = False, export_measurements: bool = False):
+def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, opt = None, out_dir_prefix: str = None, generate_reprojection_videos: bool = False, export_measurements: bool = False):
     logger.info("Prepare data - Start")
     # We use a redescending cost to stop outliers affecting the optimisation negatively
     redesc_a = 3
@@ -266,13 +266,11 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
 
-    if N > 200:
-        # Obtain the "best" 100 frames by taking the middle set of frames. NOTE: this is to prevent memory issues with taking
-        # a frame set that is too large.
-        middle_frame = num_frames // 2
-        end_frame = middle_frame + 50 if (num_frames - middle_frame) > 50 else num_frames
-        start_frame = middle_frame - 50 if middle_frame > 50 else 0
-        N = end_frame - start_frame
+    # if N > 200:
+    #     # Obtain the first 180 frames to avoid a possible memory issues with taking frames > 200.
+    #     # Note, this is only seen on the Linux i9 when looping though
+    #     end_frame = start_frame + 180
+    #     N = end_frame - start_frame
 
     # save parameters
     with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
@@ -711,23 +709,22 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     logger.info("Objective initialisation...Done")
     # RUN THE SOLVER
-    opt = SolverFactory(
-        'ipopt',
-        # executable='/home/zico/lib/ipopt/build/bin/ipopt'
-        # executable="/tmp/build/bin/ipopt"
-    )
-
-    # solver options
-    opt.options["print_level"] = 5
-    opt.options["max_iter"] = 10000
-    opt.options["max_cpu_time"] = 10000
-    opt.options["Tol"] = 1e-1
-    opt.options["OF_print_timing_statistics"] = "yes"
-    opt.options["OF_print_frequency_time"] = 10
-    opt.options["OF_hessian_approximation"] = "limited-memory"
-    opt.options["OF_accept_every_trial_step"] = "yes"
-    opt.options["linear_solver"] = "ma86"
-    opt.options['OF_ma86_scaling'] = "none"
+    if opt == None:
+        opt = SolverFactory(
+            'ipopt',
+            executable='/home/zico/lib/ipopt/build/bin/ipopt'
+        )
+        # solver options
+        opt.options["print_level"] = 5
+        opt.options["max_iter"] = 10000
+        opt.options["max_cpu_time"] = 10000
+        opt.options["Tol"] = 1e-1
+        opt.options["OF_print_timing_statistics"] = "yes"
+        opt.options["OF_print_frequency_time"] = 10
+        opt.options["OF_hessian_approximation"] = "limited-memory"
+        opt.options["OF_accept_every_trial_step"] = "yes"
+        opt.options["linear_solver"] = "ma86"
+        opt.options['OF_ma86_scaling'] = "none"
 
     logger.info("Setup optimisation - End")
     t1 = time()
@@ -785,21 +782,37 @@ if __name__ == '__main__':
     root_dir = os.path.join("/","data", "dlc", "to_analyse", "cheetah_videos")
     data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = data["test_dirs"]
-
+    out_dir_prefix="/data/zico/CheetahResults/auto_frame_select"
     if platform.python_implementation() == "PyPy":
         t0 = time()
         logger.info("Run reconstruction on all videos...")
+        # Initialise the Ipopt solver.
+        opt = SolverFactory(
+            'ipopt',
+            executable='/home/zico/lib/ipopt/build/bin/ipopt'
+        )
+        # solver options
+        opt.options["print_level"] = 5
+        opt.options["max_iter"] = 10000
+        opt.options["max_cpu_time"] = 10000
+        opt.options["Tol"] = 1e-1
+        opt.options["OF_print_timing_statistics"] = "yes"
+        opt.options["OF_print_frequency_time"] = 10
+        opt.options["OF_hessian_approximation"] = "limited-memory"
+        opt.options["OF_accept_every_trial_step"] = "yes"
+        opt.options["linear_solver"] = "ma86"
+        opt.options['OF_ma86_scaling'] = "none"
+
         for test in tqdm(tests):
             dir = test.split("/cheetah_videos/")[1]
             try:
-                run(root_dir, dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
+                run(root_dir, dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, opt=opt, out_dir_prefix=out_dir_prefix)
             except:
-                run(root_dir, dir, start_frame=-1, end_frame=1, dlc_thresh=0.5, out_dir_prefix="/data/zico/CheetahResults/auto_frame_select")
+                run(root_dir, dir, start_frame=-1, end_frame=1, dlc_thresh=0.5, opt=opt, out_dir_prefix=out_dir_prefix)
 
         t1 = time()
         logger.info(f"Run through all videos took {t1 - t0:.2f}s")
     elif platform.python_implementation() == "CPython":
-        out_dir_prefix="/data/zico/CheetahResults/auto_frame_select"
         t0 = time()
         logger.info("Run 2D reprojections on all videos...")
         for test in tqdm(tests):
