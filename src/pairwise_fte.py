@@ -266,17 +266,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
 
-    # if N > 200:
-    #     # Obtain the first 180 frames to avoid a possible memory issues with taking frames > 200.
-    #     # Note, this is only seen on the Linux i9 when looping though
-    #     end_frame = start_frame + 180
-    #     N = end_frame - start_frame
-
-    # save parameters
-    with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
-        json.dump(dict(start_frame=start_frame, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
-
-    logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
     ## ========= POSE FUNCTIONS ========
     pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "pose_3d_functions.pickle"))
 
@@ -309,22 +298,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     # ========= IMPORT DATA ========
     markers = misc.get_markers()
-
-    def get_meas_from_df(n, c, l, d):
-        n_mask = points_2d_df["frame"]== n-1
-        l_mask = points_2d_df["marker"]== markers[l-1]
-        c_mask = points_2d_df["camera"]== c-1
-        d_idx = {1:"x", 2:"y"}
-        val = points_2d_df[n_mask & l_mask & c_mask]
-        return val[d_idx[d]].values[0]
-
-    def get_likelihood_from_df(n, c, l):
-        n_mask = points_2d_df["frame"]== n-1
-        l_mask = points_2d_df["marker"]== markers[l-1]
-        c_mask = points_2d_df["camera"]== c-1
-        val = points_2d_df[n_mask & l_mask & c_mask]
-        return val["likelihood"].values[0]
-
     proj_funcs = [pt3d_to_x2d, pt3d_to_y2d]
 
     # measurement standard deviation
@@ -395,7 +368,34 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     z_est = frame_est*z_slope + z_intercept
     psi_est = np.arctan2(y_slope, x_slope)
 
+    # Obtain base and pairwise measurments. TODO: This is not technically required for the base measurements but it is a lot faster than using pandas for querying data.
+    data = {}
+    pw_data = {}
+    cam_idx = 0
+    for path in df_paths:
+        dlc_df = pd.read_hdf(path)
+        pose_array = dlc_df.droplevel([0], axis=1).to_numpy()
+        data[cam_idx] = pose_array
+        # Pairwise correspondence data.
+        h5_filename = os.path.basename(path)
+        pw_data[cam_idx] = data_ops.load_pickle(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
+        cam_idx += 1
+
+    # There has been a case where some camera view points have less frames than others. This can cause an issue when using automatic frame selection.
+    # Therefore, ensure that the end frame is within range.
+    min_num_frames = len(min(data.values()))
+    if end_frame > min_num_frames:
+        end_frame = min_num_frames
+        N = end_frame - start_frame
+
     logger.info("Prepare data - End")
+
+    # save parameters
+    with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
+        json.dump(dict(start_frame=start_frame, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
+
+    logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
+
     #===================================================
     #                   Optimisation
     #===================================================
@@ -417,25 +417,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     m.D2 = pyo.RangeSet(D2)
     m.D3 = pyo.RangeSet(D3)
     m.W = pyo.RangeSet(W)
-
-    # Obtain base and pairwise measurments. TODO: This is not technically required for the base measurements but it is a lot faster than using pandas for querying data.
-    data = {}
-    pw_data = {}
-    cam_idx = 0
-    for path in df_paths:
-        dlc_df = pd.read_hdf(path)
-        pose_array = dlc_df.droplevel([0], axis=1).to_numpy()
-        data[cam_idx] = pose_array
-        # Pairwise correspondence data.
-        h5_filename = os.path.basename(path)
-        pw_data[cam_idx] = data_ops.load_pickle(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
-        cam_idx += 1
-
-    # Pairwise correspondence.
-    # pw_data = {}
-    # for cam in range(C):
-    #     pw_data[cam] = data_ops.load_data(os.path.join(dlc_dir, f"cam{cam+1}-predictions.pickle"))
-
 
     index_dict = {"nose":23, "r_eye":0, "l_eye":1, "neck_base":24, "spine":6, "tail_base":22, "tail1":11,
      "tail2":12, "l_shoulder":13,"l_front_knee":14,"l_front_ankle":15, "l_front_paw": 16, "r_shoulder":2,
