@@ -222,6 +222,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     # load measurement dataframe (pixels, likelihood)
     points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
+    filtered_points_2d_df = points_2d_df[points_2d_df['likelihood']>dlc_thresh]    # ignore points with low likelihood
 
     if platform.python_implementation() == "PyPy":
         # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
@@ -235,7 +236,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     if end_frame == -1:
         # Automatically set start and end frame
         # defining the first and end frame as detecting all the markers on any of cameras simultaneously
-        filtered_points_2d_df = points_2d_df.query(f'likelihood > {dlc_thresh}')    # ignore points with low likelihood
         target_markers = misc.get_markers()
         markers_condition = ' or '.join([f'marker=="{ref}"' for ref in target_markers])
         num_marker = lambda i: len(filtered_points_2d_df.query(f'frame == {i} and ({markers_condition})')['marker'].unique())
@@ -260,7 +260,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         # User-defined frames
         start_frame = start_frame - 1  # 0 based indexing
         end_frame = end_frame % num_frames + 1 if end_frame == -1 else end_frame
-        filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]    # ignore points with low likelihood
     assert len(K_arr) == points_2d_df['camera'].nunique()
 
     N = end_frame - start_frame
@@ -349,9 +348,8 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     logger.info("Load H5 2D DLC prediction data")
     df_paths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
 
-    points_2d_df = utils.load_dlc_points_as_df(df_paths, verbose=False)
     points_3d_df = utils.get_pairwise_3d_points_from_df(
-        points_2d_df[points_2d_df['likelihood']>dlc_thresh],
+        filtered_points_2d_df,
         K_arr, D_arr, R_arr, t_arr,
         triangulate_points_fisheye
     )
@@ -368,6 +366,11 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     z_est = frame_est*z_slope + z_intercept
     psi_est = np.arctan2(y_slope, x_slope)
 
+    # Remove datafames from memory to conserve memory usage.
+    del points_2d_df
+    del filtered_points_2d_df
+    del points_3d_df
+
     # Obtain base and pairwise measurments. TODO: This is not technically required for the base measurements but it is a lot faster than using pandas for querying data.
     data = {}
     pw_data = {}
@@ -383,7 +386,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     # There has been a case where some camera view points have less frames than others. This can cause an issue when using automatic frame selection.
     # Therefore, ensure that the end frame is within range.
-    min_num_frames = len(min(data.values()))
+    min_num_frames = min([len(val) for val in data.values()])
     if end_frame > min_num_frames:
         end_frame = min_num_frames
         N = end_frame - start_frame
@@ -408,7 +411,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
-    W = 1  # Number of pairwise terms to include + the base measurement.
+    W = 2  # Number of pairwise terms to include + the base measurement.
 
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
@@ -697,7 +700,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         )
         # solver options
         opt.options["print_level"] = 5
-        opt.options["max_iter"] = 10000
+        opt.options["max_iter"] = 1000
         opt.options["max_cpu_time"] = 10000
         opt.options["Tol"] = 1e-1
         opt.options["OF_print_timing_statistics"] = "yes"
@@ -748,6 +751,9 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     [unused_pose_indices] = np.where(Q == 0)
     positions, states = convert_m(m, unused_pose_indices)
 
+    # Remove model from memory to conserve memory usage.
+    del m
+
     out_fpath = os.path.join(out_dir, f"fte.pickle")
     app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
     app.save_3d_cheetah_as_2d(positions, out_dir, scene_fpath, markers, project_points_fisheye, start_frame, out_fname="fte", vid_dir=data_dir)
@@ -763,7 +769,7 @@ if __name__ == '__main__':
     root_dir = os.path.join("/","data", "dlc", "to_analyse", "cheetah_videos")
     data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = data["test_dirs"]
-    out_dir_prefix="/data/zico/CheetahResults/auto_frame_select"
+    out_dir_prefix="/data/zico/CheetahResults/pairwise_2"
     if platform.python_implementation() == "PyPy":
         t0 = time()
         logger.info("Run reconstruction on all videos...")
@@ -774,7 +780,7 @@ if __name__ == '__main__':
         )
         # solver options
         opt.options["print_level"] = 5
-        opt.options["max_iter"] = 10000
+        opt.options["max_iter"] = 1000
         opt.options["max_cpu_time"] = 10000
         opt.options["Tol"] = 1e-1
         opt.options["OF_print_timing_statistics"] = "yes"
