@@ -265,6 +265,16 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
 
+    # Check that we have a valid range of frames - if not perform the entire sequence.
+    if N == 0:
+        end_frame = num_frames
+        N = end_frame - start_frame
+
+    # For memory reasons - do not perform optimisation on trajectories larger than 200 points.
+    if N > 200:
+        end_frame = start_frame + 200
+        N = end_frame - start_frame
+
     ## ========= POSE FUNCTIONS ========
     pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "pose_3d_functions.pickle"))
 
@@ -331,8 +341,8 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     R_pw = np.array([R, [2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 5.18, 5.28, 5.5, 4.7, 4.7, 5.21, 5.1, 5.27, 5.75],
     [2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 8.83, 6.52, 6.22, 6.8, 6.12, 5.37, 7.83, 6.44, 6.1]], dtype=float)
     R_pw[0, :] = 5.0
-    # R_pw[1, :] = 10.0
-    # R_pw[2, :] = 15.0
+    R_pw[1, :] = 10.0
+    R_pw[2, :] = 15.0
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
         13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
