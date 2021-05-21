@@ -17,6 +17,14 @@ from py_utils import data_ops, log
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
 
+def get_vals_v(var: pyo.Var, idxs: list) -> np.ndarray:
+    """
+    Verbose version that doesn't try to guess stuff for ya. Usage:
+    >>> get_vals(m.q, (m.N, m.DOF))
+    """
+    arr = np.array([pyo.value(var[idx]) for idx in var]).astype(float)
+    return arr.reshape(*(len(i) for i in idxs))
+
 def compare(first_file: str, second_file: str):
     data_fpaths = [first_file, second_file]
     app.plot_multiple_cheetah_reconstructions(data_fpaths, reprojections=False, dark_mode=True)
@@ -343,6 +351,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     R_pw[0, :] = 5.0
     R_pw[1, :] = 10.0
     R_pw[2, :] = 15.0
+
     Q = [ # model parameters variance
         4, 7, 5, # x, y, z
         13, 32, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, #  phi_1, ... , phi_14
@@ -421,7 +430,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     C = len(K_arr) # number of cameras
     D2 = 2 # dimensionality of measurements
     D3 = 3 # dimensionality of measurements
-    W = 2  # Number of pairwise terms to include + the base measurement.
+    W = 1  # Number of pairwise terms to include + the base measurement.
 
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
@@ -519,7 +528,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     m.dx = pyo.Var(m.N, m.P) #velocity
     m.ddx = pyo.Var(m.N, m.P) #acceleration
     m.poses = pyo.Var(m.N, m.L, m.D3)
-    m.slack_model = pyo.Var(m.N, m.P)
+    m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
@@ -694,7 +703,6 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
             for l in m.L:
                 for c in m.C:
                     for d2 in m.D2:
-                        # slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l] * m.slack_meas[n, c, l, d2], redesc_a, redesc_b, redesc_c)
                         for w in m.W:
                             slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
         return 1e-3 * (slack_meas_err + slack_model_err)
@@ -751,10 +759,20 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
                     del dx_optimised[n][p]
                     del ddx_optimised[n][p]
 
+
+        model_weight = get_vals_v(m.model_err_weight, [m.P])
+        model_err = get_vals_v(m.slack_model, [m.N, m.P])
+        meas_err = get_vals_v(m.slack_meas, [m.N, m.C, m.L, m.D2, m.W])
+        meas_weight = get_vals_v(m.meas_err_weight, [m.N, m.C, m.L, m.W])
+
         states = dict(
             x=x_optimised,
             dx=dx_optimised,
             ddx=ddx_optimised,
+            model_err=model_err,
+            model_weight=model_weight,
+            meas_err=meas_err.squeeze(),
+            meas_weight=meas_weight.squeeze()
         )
         return positions, states
 
