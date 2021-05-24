@@ -140,6 +140,13 @@ def redescending_loss(err, a, b, c):
     cost += func_step(c, e)*(a*b - (a**2)/2 + (a*(c-b)/2))
     return cost
 
+def redescending_smooth_loss(r, c, arctan_func):
+    cost = (0.25*c**2 * (arctan_func(r/c)**2 + ((c*r)**2)/(c**4+r**4)))
+    return cost
+
+def fair_loss(r, c, log_func):
+    cost = (c**2 * ((abs(r)/c) - log_func(1 + (abs(r)/c))))
+    return cost
 
 def global_positions(R_arr, t_arr):
     "Returns a vector of camera position vectors in the world frame"
