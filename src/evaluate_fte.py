@@ -4,8 +4,15 @@ from typing import Dict
 from argparse import ArgumentParser
 
 import numpy as np
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import cycler
+
 from py_utils import data_ops
+from lib import misc
+
+plt.rcParams['axes.grid'] = True
 
 def _calculate_delta_acc(acc: np.ndarray) -> np.ndarray:
     return np.array([(acc[n, :] - acc[n-1, :]) for n in range(1, len(acc))])
@@ -16,7 +23,7 @@ def eval_delta_acc(data: Dict, results_dir: str, show_plot = False) -> np.ndarra
     x_axis_range = range(start_frame, start_frame + len(acc))
     delta_acc = _calculate_delta_acc(acc)
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(16, 12), dpi=120)
     fig.suptitle("Acceleration and Delta Acceleration (-) States", fontsize=14)
     fig.subplots_adjust(hspace=0.5, wspace=0.3)
 
@@ -71,20 +78,25 @@ def eval_meas_error(data: Dict, results_dir: str, show_plot = False) -> None:
 
     meas_weight = np.expand_dims(meas_weight, 3)
     weighted_meas_err = meas_weight * meas_err
-    avg_meas_err = np.array([np.mean(meas_err[:, cam_idx], axis=(1, 2)) for cam_idx in range(6)])
-    avg_filtered_meas_err = np.array([np.mean(weighted_meas_err[:, cam_idx], axis=(1, 2)) for cam_idx in range(6)])
+    avg_meas_err = np.array([np.mean(meas_err[:, cam_idx], axis=2) for cam_idx in range(6)])
+    avg_filtered_meas_err = np.array([np.mean(weighted_meas_err[:, cam_idx], axis=2) for cam_idx in range(6)])
 
-    fig = plt.figure()
+    markers = misc.get_markers()
+    marker_colors = cm.rainbow(np.linspace(0, 1, len(markers)))
+    mpl.rcParams['axes.prop_cycle'] = cycler.cycler('color', marker_colors)
+
+    fig = plt.figure(figsize=(16, 12), dpi=120)
     fig.suptitle("Reprojection Error (Before Filtering and Scaling)", fontsize=14)
-    fig.subplots_adjust(hspace=0.5)
     base_subplot_value = 320
+    plotted_values = None
     for idx in range(6):
         base_subplot_value += 1
         plt.subplot(base_subplot_value)
         plt.title(f"CAM {idx+1}")
-        plt.plot(x_axis_range, avg_meas_err[idx, :], "r")
+        plotted_values = plt.plot(x_axis_range, avg_meas_err[idx, :, :])
 
     # Set common labels
+    fig.legend(plotted_values, markers, loc = (0.91, 0.4))
     fig.text(0.5, 0.04, "Frame Number", ha='center', va='center')
     fig.text(0.06, 0.5, "Error [pixels]", ha='center', va='center', rotation='vertical')
 
@@ -92,17 +104,17 @@ def eval_meas_error(data: Dict, results_dir: str, show_plot = False) -> None:
         plt.savefig(os.path.join(results_dir, "fte_meas_error.png"))
         plt.close()
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(16, 12), dpi=120)
     fig.suptitle("Reprojection Error (After Filtering and Scaling)", fontsize=14)
-    fig.subplots_adjust(hspace=0.5)
     base_subplot_value = 320
     for idx in range(6):
         base_subplot_value += 1
         plt.subplot(base_subplot_value)
         plt.title(f"CAM {idx+1}")
-        plt.plot(x_axis_range, avg_filtered_meas_err[idx, :], "g")
+        plotted_values = plt.plot(x_axis_range, avg_filtered_meas_err[idx, :, :])
 
     # Set common labels
+    fig.legend(plotted_values, markers, loc = (0.91, 0.4))
     fig.text(0.5, 0.04, "Frame Number", ha='center', va='center')
     fig.text(0.06, 0.5, "Error [pixels]", ha='center', va='center', rotation='vertical')
 
@@ -123,7 +135,7 @@ def eval_model_error(data: Dict, results_dir: str, show_plot = False) -> None:
     avg_model_err = np.mean(model_err[:, model_weight != 0], axis=1)
     avg_filtered_model_err = np.mean(model_err * np.sqrt(model_weight), axis=1)
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(16, 12), dpi=120)
     fig.suptitle("Model Error (Before Scaling)", fontsize=14)
     fig.subplots_adjust(hspace=0.5)
     base_subplot_value = 321
@@ -144,7 +156,7 @@ def eval_model_error(data: Dict, results_dir: str, show_plot = False) -> None:
         plt.savefig(os.path.join(results_dir, "fte_model_error.png"))
         plt.close()
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(16, 12), dpi=120)
     fig.suptitle("Model Error (After Scaling)", fontsize=14)
     fig.subplots_adjust(hspace=0.5)
     base_subplot_value = 321
