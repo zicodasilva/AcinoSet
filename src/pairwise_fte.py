@@ -8,6 +8,7 @@ from glob import glob
 from time import time
 from tqdm import tqdm
 from scipy.stats import linregress
+from scipy.interpolate import UnivariateSpline
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 from lib import misc, utils, app
@@ -28,6 +29,9 @@ def get_vals_v(var: pyo.Var, idxs: list) -> np.ndarray:
 def compare(first_file: str, second_file: str):
     data_fpaths = [first_file, second_file]
     app.plot_multiple_cheetah_reconstructions(data_fpaths, reprojections=False, dark_mode=True)
+
+def plot_cheetah(fte_file: str):
+    app.plot_cheetah_reconstruction(fte_file, reprojections=False, dark_mode=True)
 
 def display_test_image(data_dir, cam_num, pw_values, frame_num):
     import cv2
@@ -375,15 +379,27 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     # estimate initial points
     logger.info("Estimate the initial trajectory")
-    nose_pts = points_3d_df[points_3d_df["marker"]=="nose"][["frame", "x", "y", "z"]].values
-    x_slope, x_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,1])
-    y_slope, y_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,2])
-    z_slope, z_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,3])
+    # nose_pts = points_3d_df[points_3d_df["marker"]=="nose"][["frame", "x", "y", "z"]].values
+    # x_slope, x_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,1])
+    # y_slope, y_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,2])
+    # z_slope, z_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,3])
+    # frame_est = np.arange(end_frame)
+    # x_est = frame_est*x_slope + x_intercept
+    # y_est = frame_est*y_slope + y_intercept
+    # z_est = frame_est*z_slope + z_intercept
+    # psi_est = np.arctan2(y_slope, x_slope)
+
     frame_est = np.arange(end_frame)
-    x_est = frame_est*x_slope + x_intercept
-    y_est = frame_est*y_slope + y_intercept
-    z_est = frame_est*z_slope + z_intercept
-    psi_est = np.arctan2(y_slope, x_slope)
+    spine_pts = points_3d_df[points_3d_df["marker"]=="spine"][["frame", "x", "y", "z"]].values
+    traj_est_x = UnivariateSpline(spine_pts[:, 0], spine_pts[:, 1])
+    traj_est_y = UnivariateSpline(spine_pts[:, 0], spine_pts[:, 2])
+    traj_est_z = UnivariateSpline(spine_pts[:, 0], spine_pts[:, 3])
+    x_est = traj_est_x(frame_est)
+    y_est = traj_est_y(frame_est)
+    z_est = traj_est_z(frame_est)
+    dx_est = np.diff(x_est) / Ts
+    dy_est = np.diff(y_est) / Ts
+    psi_est = np.arctan2(dy_est, dx_est)
 
     # Remove datafames from memory to conserve memory usage.
     del points_2d_df
@@ -535,10 +551,12 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # state_indices = Q > 0
     # ekf_states = data_ops.load_pickle(os.path.join(data_dir, "ekf", "ekf.pickle"))
     init_x = np.zeros((N, P))
-    init_x[:,0] = x_est[start_frame: start_frame+N] #x # change this to [start_frame: end_frame]?
-    init_x[:,1] = y_est[start_frame: start_frame+N] #y
-    init_x[:,2] = z_est[start_frame: start_frame+N] #z
-    init_x[:,31] = psi_est # yaw = psi
+    init_x[:, 0] = x_est[start_frame: start_frame+N] #x # change this to [start_frame: end_frame]?
+    init_x[:, 1] = y_est[start_frame: start_frame+N] #y
+    init_x[:, 2] = z_est[start_frame: start_frame+N] #z
+    # init_x[:, 31] = psi_est # yaw = psi
+    init_x[:-1, 31] = psi_est[start_frame: start_frame+N] # yaw = psi
+    init_x[-1, 31] = init_x[-2, 31] # duplicate the last value.
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
     # init_x[:, state_indices] = ekf_states["x"]
@@ -576,7 +594,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     # INTEGRATION
     def backwards_euler_pos(m,n,p): # position
         if n > 1:
-    #             return m.x[n,p] == m.x[n-1,p] + m.h*m.dx[n-1,p] + m.h**2 * m.ddx[n-1,p]/2
+                # return m.x[n,p] == m.x[n-1,p] + m.Ts*m.dx[n-1,p] + m.Ts**2 * m.ddx[n-1,p]/2
             return m.x[n,p] == m.x[n-1,p] + m.Ts*m.dx[n,p]
 
         else:

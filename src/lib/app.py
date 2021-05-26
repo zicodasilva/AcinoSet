@@ -19,10 +19,6 @@ from .calib import calibrate_camera, calibrate_fisheye_camera, \
     project_points, project_points_fisheye, \
     _calibrate_pairwise_extrinsics
 
-if platform.python_implementation() == "CPython":
-    from .plotting import plot_calib_board, plot_optimized_states, \
-        plot_extrinsics, Cheetah
-
 
 def extract_corners_from_images(img_dir, out_fpath, board_shape, board_edge_len, window_size=11, remove_unused_images=False):
     print(f'Finding calibration board corners for images in {img_dir}')
@@ -95,11 +91,15 @@ def sba_points_fisheye(scene_fpath, points_2d_df):
 # ==========  PLOTTING  ==========
 
 def plot_corners(points_fpath):
+    from .plotting import plot_calib_board
+
     points, fnames, board_shape, board_edge_len, cam_res = load_points(points_fpath)
     plot_calib_board(points, board_shape, cam_res)
 
 
 def plot_points_standard_undistort(points_fpath, camera_fpath):
+    from .plotting import plot_calib_board
+
     k, d, cam_res = load_camera(camera_fpath)
     points, _, board_shape, *_ = load_points(points_fpath)
     undistort_pts = create_undistort_point_function(k, d)
@@ -108,6 +108,8 @@ def plot_points_standard_undistort(points_fpath, camera_fpath):
 
 
 def plot_points_fisheye_undistort(points_fpath, camera_fpath):
+    from .plotting import plot_calib_board
+
     k, d, cam_res = load_camera(camera_fpath)
     points, _, board_shape, *_ = load_points(points_fpath)
     undistort_pts = create_undistort_fisheye_point_function(k, d)
@@ -116,6 +118,8 @@ def plot_points_fisheye_undistort(points_fpath, camera_fpath):
 
 
 def plot_scene(data_dir, scene_fname=None, manual_points_only=False, **kwargs):
+    from .plotting import plot_extrinsics
+
     *_, scene_fpath = find_scene_file(data_dir, scene_fname, verbose=False)
     points_dir = os.path.join(os.path.dirname(scene_fpath), 'points')
     pts_2d, frames = [], []
@@ -135,6 +139,7 @@ def plot_scene(data_dir, scene_fname=None, manual_points_only=False, **kwargs):
 
 
 def plot_cheetah_states(states, smoothed_states=None, out_fpath=None, mplstyle_fpath=None):
+    from .plotting import plot_optimized_states
     fig, axs = plot_optimized_states(states, smoothed_states, mplstyle_fpath)
     if out_fpath is not None:
         fig.savefig(out_fpath, transparent=True)
@@ -142,6 +147,8 @@ def plot_cheetah_states(states, smoothed_states=None, out_fpath=None, mplstyle_f
 
 
 def _plot_cheetah_reconstruction(positions, data_dir, scene_fname=None, labels=None, **kwargs):
+    from .plotting import Cheetah
+
     positions = np.array(positions)
     *_, scene_fpath = find_scene_file(data_dir, scene_fname, verbose=False)
     ca = Cheetah(positions, scene_fpath, labels, project_points_fisheye, **kwargs)
