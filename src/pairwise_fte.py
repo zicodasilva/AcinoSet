@@ -816,6 +816,18 @@ if __name__ == '__main__':
     data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = data["test_dirs"]
     out_dir_prefix="/data/zico/CheetahResults/pairwise_2"
+    manually_selected_frames = {
+        "2017_08_29/top/phantom/run1_1": (20, 170),
+        "2019_03_03/menya/run": (20, 150),
+        "2019_03_07/menya/run": (70, 160),
+        "2019_03_09/lily/run": (50, 200),
+        "2019_03_05/lily/flick": (100, 200),
+        "2017_08_29/top/zorro/flick1_2": (20, 140),
+        "2017_09_02/bottom/phantom/flick2_1": (5, 100),
+        "2017_12_12/bottom/big_girl/flick2": (30, 100),
+        "2019_03_03/phantom/flick": (270, 460),
+    }
+    bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1")
     if platform.python_implementation() == "PyPy":
         t0 = time()
         logger.info("Run reconstruction on all videos...")
@@ -838,6 +850,15 @@ if __name__ == '__main__':
 
         for test in tqdm(tests):
             dir = test.split("/cheetah_videos/")[1]
+            # Filter parameters based on past experience.
+            if dir in bad_videos:
+                # Skip these videos because of erroneous input data.
+                continue
+            start_frame = 1
+            end_frame = -1
+            if dir in set(manually_selected_frames.keys()):
+                start_frame = manually_selected_frames[dir](0)
+                end_frame = manually_selected_frames[dir](1)
             try:
                 run(root_dir, dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, opt=opt, out_dir_prefix=out_dir_prefix)
             except:
@@ -850,6 +871,10 @@ if __name__ == '__main__':
         logger.info("Run 2D reprojections on all videos...")
         for test in tqdm(tests):
             dir = test.split("/cheetah_videos/")[1]
+            # Filter parameters based on past experience.
+            if dir in bad_videos:
+                # Skip these videos because of erroneous input data.
+                continue
             try:
                 if out_dir_prefix:
                     out_dir = os.path.join(out_dir_prefix, dir, "fte_pw")
