@@ -397,8 +397,8 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     x_est = traj_est_x(frame_est)
     y_est = traj_est_y(frame_est)
     z_est = traj_est_z(frame_est)
-    dx_est = np.diff(x_est) / Ts
-    dy_est = np.diff(y_est) / Ts
+    dx_est = np.diff(x_est, prepend=x_est[0]) / Ts
+    dy_est = np.diff(y_est, prepend=y_est[0]) / Ts
     psi_est = np.arctan2(dy_est, dx_est)
 
     # Remove datafames from memory to conserve memory usage.
@@ -555,8 +555,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     init_x[:, 1] = y_est[start_frame: start_frame+N] #y
     init_x[:, 2] = z_est[start_frame: start_frame+N] #z
     # init_x[:, 31] = psi_est # yaw = psi
-    init_x[:-1, 31] = psi_est[start_frame: start_frame+N] # yaw = psi
-    init_x[-1, 31] = init_x[-2, 31] # duplicate the last value.
+    init_x[:, 31] = psi_est[start_frame: start_frame+N] # yaw = psi
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
     # init_x[:, state_indices] = ekf_states["x"]
@@ -815,7 +814,7 @@ if __name__ == '__main__':
     root_dir = os.path.join("/","data", "dlc", "to_analyse", "cheetah_videos")
     data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = data["test_dirs"]
-    out_dir_prefix="/data/zico/CheetahResults/pairwise_2"
+    out_dir_prefix="/data/zico/CheetahResults/test_initial_estimate"
     manually_selected_frames = {
         "2017_08_29/top/phantom/run1_1": (20, 170),
         "2019_03_03/menya/run": (20, 150),
@@ -827,7 +826,7 @@ if __name__ == '__main__':
         "2017_12_12/bottom/big_girl/flick2": (30, 100),
         "2019_03_03/phantom/flick": (270, 460),
     }
-    bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1")
+    bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1", "2017_12_17/top/zorro/flick1")
     if platform.python_implementation() == "PyPy":
         t0 = time()
         logger.info("Run reconstruction on all videos...")
@@ -857,10 +856,10 @@ if __name__ == '__main__':
             start_frame = 1
             end_frame = -1
             if dir in set(manually_selected_frames.keys()):
-                start_frame = manually_selected_frames[dir](0)
-                end_frame = manually_selected_frames[dir](1)
+                start_frame = manually_selected_frames[dir][0]
+                end_frame = manually_selected_frames[dir][1]
             try:
-                run(root_dir, dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, opt=opt, out_dir_prefix=out_dir_prefix)
+                run(root_dir, dir, start_frame=start_frame, end_frame=end_frame, dlc_thresh=0.5, opt=opt, out_dir_prefix=out_dir_prefix)
             except:
                 run(root_dir, dir, start_frame=-1, end_frame=1, dlc_thresh=0.5, opt=opt, out_dir_prefix=out_dir_prefix)
 
