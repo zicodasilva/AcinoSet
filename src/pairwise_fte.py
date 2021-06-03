@@ -836,7 +836,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     logger.info("Done")
 
-def benchmark_loss_functions(out_dir_prefix: str, loss: str):
+def run_subset_tests(out_dir_prefix: str, loss: str):
     root_dir = os.path.join("/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos")
     test_videos = (
     "2017_12_09/top/jules/run1",

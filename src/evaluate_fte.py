@@ -76,24 +76,25 @@ def eval_meas_error(data: Dict, results_dir: str, show_plot = False) -> None:
 
     x_axis_range = range(start_frame, start_frame + len(meas_weight))
 
+    num_cams = meas_err.shape[1]
     meas_weight = np.expand_dims(meas_weight, 3)
     weighted_meas_err = meas_weight * meas_err
-    avg_meas_err = np.array([np.mean(meas_err[:, cam_idx], axis=2) for cam_idx in range(6)])
-    avg_filtered_meas_err = np.array([np.mean(weighted_meas_err[:, cam_idx], axis=2) for cam_idx in range(6)])
+    xy_meas_err = np.array([np.mean(meas_err[:, cam_idx], axis=2) for cam_idx in range(num_cams)])
+    xy_filtered_meas_err = np.array([np.mean(weighted_meas_err[:, cam_idx], axis=2) for cam_idx in range(num_cams)])
 
     markers = misc.get_markers()
-    marker_colors = cm.rainbow(np.linspace(0, 1, len(markers)))
+    marker_colors = cm.jet(np.linspace(0, 1, len(markers)))
     mpl.rcParams['axes.prop_cycle'] = cycler.cycler('color', marker_colors)
 
     fig = plt.figure(figsize=(16, 12), dpi=120)
     fig.suptitle("Reprojection Error (Before Filtering and Scaling)", fontsize=14)
     base_subplot_value = 320
     plotted_values = None
-    for idx in range(6):
+    for idx in range(num_cams):
         base_subplot_value += 1
         plt.subplot(base_subplot_value)
         plt.title(f"CAM {idx+1}")
-        plotted_values = plt.plot(x_axis_range, avg_meas_err[idx, :, :])
+        plotted_values = plt.plot(x_axis_range, xy_meas_err[idx, :, :], marker="o", markersize=2)
 
     # Set common labels
     fig.legend(plotted_values, markers, loc = (0.91, 0.4))
@@ -107,11 +108,11 @@ def eval_meas_error(data: Dict, results_dir: str, show_plot = False) -> None:
     fig = plt.figure(figsize=(16, 12), dpi=120)
     fig.suptitle("Reprojection Error (After Filtering and Scaling)", fontsize=14)
     base_subplot_value = 320
-    for idx in range(6):
+    for idx in range(num_cams):
         base_subplot_value += 1
         plt.subplot(base_subplot_value)
-        plt.title(f"CAM {idx+1}")
-        plotted_values = plt.plot(x_axis_range, avg_filtered_meas_err[idx, :, :])
+        plt.title(f"CAM {idx+1} (\u03BC: {np.mean(xy_filtered_meas_err[idx, :, :]):.2f}, \u03C3: {np.std(xy_filtered_meas_err[idx, :, :]):.2f})")
+        plotted_values = plt.plot(x_axis_range, xy_filtered_meas_err[idx, :, :], marker="o", markersize=2)
 
     # Set common labels
     fig.legend(plotted_values, markers, loc = (0.91, 0.4))
@@ -179,6 +180,20 @@ def eval_model_error(data: Dict, results_dir: str, show_plot = False) -> None:
         plt.savefig(os.path.join(results_dir, "fte_model_error_scaled.png"))
         plt.close()
 
+def run_subset_tests(root_dir: str):
+    fte_files = glob.glob(os.path.join(root_dir, "**/fte.pickle"), recursive=True)
+    delta_acc_list = []
+    for fte_file in fte_files:
+        data = data_ops.load_pickle(fte_file)
+        eval_dir = os.path.join(os.path.dirname(fte_file), "evaluation")
+        os.makedirs(eval_dir, exist_ok=True)
+
+        max_delta_acc = eval_delta_acc(data, eval_dir)
+        eval_model_error(data, eval_dir)
+        eval_meas_error(data, eval_dir)
+        delta_acc_list.append(max_delta_acc)
+
+    return np.array(delta_acc_list)
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="FTE Evaluation")
