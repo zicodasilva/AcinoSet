@@ -144,6 +144,10 @@ def redescending_smooth_loss(r, c, arctan_func):
     cost = (0.25*c**2 * (arctan_func(r/c)**2 + ((c*r)**2)/(c**4+r**4)))
     return cost
 
+def cauchy_loss(r, c, log_func):
+    cost = c**2 * (log_func(1 + (r/c)**2))
+    return cost
+
 def fair_loss(r, c, log_func):
     cost = (c**2 * ((abs(r)/c) - log_func(1 + (abs(r)/c))))
     return cost
