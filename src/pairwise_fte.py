@@ -2,6 +2,7 @@ import os
 import platform
 import json
 import numpy as np
+from pyomo.core.expr.current import log as pyomo_log
 import sympy as sp
 import pandas as pd
 from glob import glob
@@ -32,6 +33,37 @@ def compare(first_file: str, second_file: str):
 
 def plot_cheetah(fte_file: str):
     app.plot_cheetah_reconstruction(fte_file, reprojections=False, dark_mode=True)
+
+def plot_cost_functions():
+    import matplotlib.pyplot as plt
+    # cost function
+    redesc_a = 5
+    redesc_b = 15
+    redesc_c = 30
+    r_x = np.arange(-100, 100, 1e-1)
+    r_y1 = [misc.redescending_loss(i, redesc_a, redesc_b, redesc_c) for i in r_x]
+    r_y2 = [misc.redescending_smooth_loss(i, redesc_b, np.arctan) for i in r_x]
+    r_y3 = r_x ** 2
+    r_y4 = [misc.fair_loss(i, redesc_b, np.log) for i in r_x]
+    plt.figure()
+    plt.plot(r_x,r_y1, label='Redescending')
+    plt.plot(r_x,r_y2, label='Smooth Redescending')
+    plt.plot(r_x,r_y4, label='Fair')
+    plt.plot(r_x,r_y3, label='LSQ')
+    ax = plt.gca()
+    ax.set_ylim((-5, 120))
+    ax.legend()
+    plt.show(block=True)
+
+def loss_function(residual: float, loss = "redescending"):
+    if loss == "redescending":
+        return misc.redescending_loss(residual, 3, 10, 20)
+    elif loss == "smooth_redescending":
+        return misc.redescending_smooth_loss(residual, 10, pyo.atan)
+    elif loss == "fair":
+        return misc.fair_loss(residual, 10, pyomo_log)
+    elif loss == "lsq":
+        return residual ** 2
 
 def display_test_image(data_dir, cam_num, pw_values, frame_num):
     import cv2
@@ -190,12 +222,8 @@ def create_pose_functions(data_dir):
     # Save the functions to file.
     data_ops.save_dill(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
 
-def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, opt = None, out_dir_prefix: str = None, generate_reprojection_videos: bool = False, export_measurements: bool = False):
+def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thresh: float, loss = "redescending", opt = None, out_dir_prefix: str = None, generate_reprojection_videos: bool = False, export_measurements: bool = False):
     logger.info("Prepare data - Start")
-    # We use a redescending cost to stop outliers affecting the optimisation negatively
-    redesc_a = 3
-    redesc_b = 10
-    redesc_c = 20
 
     t0 = time()
 
@@ -379,27 +407,25 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     # estimate initial points
     logger.info("Estimate the initial trajectory")
-    # nose_pts = points_3d_df[points_3d_df["marker"]=="nose"][["frame", "x", "y", "z"]].values
-    # x_slope, x_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,1])
-    # y_slope, y_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,2])
-    # z_slope, z_intercept, *_ = linregress(nose_pts[:,0], nose_pts[:,3])
-    # frame_est = np.arange(end_frame)
-    # x_est = frame_est*x_slope + x_intercept
-    # y_est = frame_est*y_slope + y_intercept
-    # z_est = frame_est*z_slope + z_intercept
-    # psi_est = np.arctan2(y_slope, x_slope)
-
+    # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
     frame_est = np.arange(end_frame)
-    spine_pts = points_3d_df[points_3d_df["marker"]=="spine"][["frame", "x", "y", "z"]].values
-    traj_est_x = UnivariateSpline(spine_pts[:, 0], spine_pts[:, 1])
-    traj_est_y = UnivariateSpline(spine_pts[:, 0], spine_pts[:, 2])
-    traj_est_z = UnivariateSpline(spine_pts[:, 0], spine_pts[:, 3])
-    x_est = traj_est_x(frame_est)
-    y_est = traj_est_y(frame_est)
-    z_est = traj_est_z(frame_est)
-    dx_est = np.diff(x_est, prepend=x_est[0]) / Ts
-    dy_est = np.diff(y_est, prepend=y_est[0]) / Ts
+
+    nose_pts = points_3d_df[points_3d_df["marker"]=="nose"][["frame", "x", "y", "z"]].values
+    nose_pts[:, 1] = nose_pts[:, 1] - 0.055
+    nose_pts[:, 3] = nose_pts[:, 3] + 0.055
+    traj_est_x = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 1])
+    traj_est_y = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 2])
+    traj_est_z = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 3])
+    x_est = np.array(traj_est_x(frame_est))
+    y_est = np.array(traj_est_y(frame_est))
+    z_est = np.array(traj_est_z(frame_est))
+
+    # Calculate the initial yaw.
+    dx_est = np.diff(x_est) / Ts
+    dy_est = np.diff(y_est) / Ts
     psi_est = np.arctan2(dy_est, dx_est)
+    # Duplicate the last heading estimate as the difference calculation returns N-1.
+    psi_est = np.append(psi_est, [psi_est[-1]])
 
     # Remove datafames from memory to conserve memory usage.
     del points_2d_df
@@ -634,7 +660,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     #Neck
     def neck_phi_1(m,n):
-        return abs(m.x[n,5]) <= np.pi/6
+        return abs(m.x[n,5]) <= np.pi/2
     m.neck_phi_1 = pyo.Constraint(m.N, rule=neck_phi_1)
     def neck_theta_1(m,n):
         return abs(m.x[n,19]) <= np.pi/6
@@ -721,7 +747,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
                 for c in m.C:
                     for d2 in m.D2:
                         for w in m.W:
-                            slack_meas_err += misc.redescending_loss(m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], redesc_a, redesc_b, redesc_c)
+                            slack_meas_err += loss_function(m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
         return 1e-3 * (slack_meas_err + slack_model_err)
 
     m.obj = pyo.Objective(rule = obj)
@@ -809,6 +835,53 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
         app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
     logger.info("Done")
+
+def benchmark_loss_functions(out_dir_prefix: str, loss: str):
+    root_dir = os.path.join("/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos")
+    test_videos = (
+    "2017_12_09/top/jules/run1",
+    "2017_08_29/top/jules/run1_1",
+    "2019_02_27/romeo/run",
+    "2017_12_16/top/phantom/flick1",
+    "2019_03_03/menya/flick",
+    "2017_12_21/top/lily/flick1",
+    "2017_12_21/bottom/jules/flick2_2",
+    "2019_02_27/kiara/run")
+
+    t0 = time()
+    logger.info("Run reconstruction on all videos...")
+    # Initialise the Ipopt solver.
+    opt = SolverFactory(
+        'ipopt',
+        # executable='/home/zico/lib/ipopt/build/bin/ipopt'
+    )
+    # solver options
+    opt.options["print_level"] = 5
+    opt.options["max_iter"] = 1000
+    opt.options["max_cpu_time"] = 10000
+    opt.options["Tol"] = 1e-1
+    opt.options["OF_print_timing_statistics"] = "yes"
+    opt.options["OF_print_frequency_time"] = 10
+    opt.options["OF_hessian_approximation"] = "limited-memory"
+    opt.options["OF_accept_every_trial_step"] = "yes"
+    opt.options["linear_solver"] = "ma86"
+    opt.options['OF_ma86_scaling'] = "none"
+
+    if platform.python_implementation() == "PyPy":
+        for test_dir in tqdm(test_videos):
+            run(root_dir, test_dir, start_frame=1, end_frame=-1, dlc_thresh=0.5, loss=loss, opt=opt, out_dir_prefix=out_dir_prefix)
+    else:
+        for test in tqdm(test_videos):
+            dir = test.split("/cheetah_videos/")[1]
+            if out_dir_prefix:
+                out_dir = os.path.join(out_dir_prefix, dir, "fte_pw")
+            else:
+                out_dir = os.path.join(root_dir, dir, "fte_pw")
+            video_fpaths = sorted(glob(os.path.join(root_dir, dir, "cam[1-9].mp4"))) # original vids should be in the parent dir
+            app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=0.5)
+
+    t1 = time()
+    logger.info(f"Run through all videos took {t1 - t0:.2f}s")
 
 if __name__ == '__main__':
     root_dir = os.path.join("/","data", "dlc", "to_analyse", "cheetah_videos")
