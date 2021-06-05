@@ -8,7 +8,6 @@ import pandas as pd
 from glob import glob
 from time import time
 from tqdm import tqdm
-from scipy.stats import linregress
 from scipy.interpolate import UnivariateSpline
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
@@ -29,13 +28,12 @@ def get_vals_v(var: pyo.Var, idxs: list) -> np.ndarray:
     return arr.reshape(*(len(i) for i in idxs))
 
 
-def compare(first_file: str, second_file: str):
-    data_fpaths = [first_file, second_file]
-    app.plot_multiple_cheetah_reconstructions(data_fpaths, reprojections=False, dark_mode=True)
-
-
-def plot_cheetah(fte_file: str):
-    app.plot_cheetah_reconstruction(fte_file, reprojections=False, dark_mode=True)
+def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None):
+    fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
+    if out_dir_prefix is not None:
+        fte_file = os.path.join(out_dir_prefix, data_dir, "fte_pw", "fte.pickle")
+    app.plot_cheetah_reconstruction(fte_file, scene_fname=scene_fpath, reprojections=False, dark_mode=True)
 
 
 def plot_cost_functions():
@@ -71,33 +69,7 @@ def loss_function(residual: float, loss="redescending"):
         return residual**2
 
 
-def display_test_image(data_dir, cam_num, pw_values, frame_num):
-    import cv2
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-
-    markers = misc.get_markers()
-    marker_colors = cm.rainbow(np.linspace(0, 1, len(markers)))
-    frame = os.path.join(data_dir, "frames", f"cam{cam_num}", f"frame{frame_num}.png")
-    for pw in pw_values:
-        # Plot the image.
-        image = cv2.cvtColor(cv2.imread(frame), cv2.COLOR_BGR2RGB)
-        plt.figure(pw)
-        plt.imshow(image)
-        df = pd.read_hdf(os.path.join(data_dir, "fte_pw", "measurements", f"cam{cam_num}_pw_{pw}.h5"))
-        for idx, marker in enumerate(markers):
-            plt.plot(df.loc[frame_num - 1][marker]["x"],
-                     df.loc[frame_num - 1][marker]["y"],
-                     ".",
-                     markersize=10,
-                     color=marker_colors[idx],
-                     label=marker)
-            plt.legend(loc="upper right", fontsize="xx-small")
-    # Show the plot.
-    plt.show()
-
-
-def create_pose_functions(data_dir):
+def create_pose_functions(data_dir: str):
     ## ========= POSE FUNCTIONS ========
     #SYMBOLIC ROTATION MATRIX FUNCTIONS
     def rot_x(x):
@@ -279,32 +251,32 @@ def run(root_dir: str,
         fps = 120 if "2019" in data_dir else 90
 
     # load DLC data
-    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
-    assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json'
+    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
+    assert n_cams == len(dlc_points_fpaths), f"# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json"
 
     # load measurement dataframe (pixels, likelihood)
     points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
-    filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]  # ignore points with low likelihood
+    filtered_points_2d_df = points_2d_df[points_2d_df["likelihood"] > dlc_thresh]  # ignore points with low likelihood
 
     if platform.python_implementation() == "PyPy":
         # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
         # So instead I manually get the number of frames and the frame rate based (determined above).
         num_frames = points_2d_df["frame"].max() + 1
 
-    assert 0 != start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
-    assert 0 != end_frame <= num_frames, f'end_frame must be less than or equal to {num_frames}'
-    assert 0 <= dlc_thresh <= 1, 'dlc_thresh must be from 0 to 1'
+    assert 0 != start_frame < num_frames, f"start_frame must be strictly between 0 and {num_frames}"
+    assert 0 != end_frame <= num_frames, f"end_frame must be less than or equal to {num_frames}"
+    assert 0 <= dlc_thresh <= 1, "dlc_thresh must be from 0 to 1"
 
     if end_frame == -1:
         # Automatically set start and end frame
         # defining the first and end frame as detecting all the markers on any of cameras simultaneously
         target_markers = misc.get_markers()
-        markers_condition = ' or '.join([f'marker=="{ref}"' for ref in target_markers])
+        markers_condition = " or ".join([f"marker=='{ref}'" for ref in target_markers])
         num_marker = lambda i: len(
-            filtered_points_2d_df.query(f'frame == {i} and ({markers_condition})')['marker'].unique())
+            filtered_points_2d_df.query(f"frame == {i} and ({markers_condition})")["marker"].unique())
 
         start_frame, end_frame = -1, -1
-        max_idx = filtered_points_2d_df["frame"].max() + 1
+        max_idx = points_2d_df["frame"].max() + 1
         for i in range(max_idx):
             if num_marker(i) == len(target_markers):
                 start_frame = i
@@ -323,7 +295,7 @@ def run(root_dir: str,
         # User-defined frames
         start_frame = start_frame - 1  # 0 based indexing
         end_frame = end_frame % num_frames + 1 if end_frame == -1 else end_frame
-    assert len(K_arr) == points_2d_df['camera'].nunique()
+    assert len(K_arr) == points_2d_df["camera"].nunique()
 
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
@@ -473,7 +445,7 @@ def run(root_dir: str,
     #                   Load in data
     #===================================================
     logger.info("Load H5 2D DLC prediction data")
-    df_paths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
+    df_paths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
 
     points_3d_df = utils.get_pairwise_3d_points_from_df(filtered_points_2d_df, K_arr, D_arr, R_arr, t_arr,
                                                         triangulate_points_fisheye)
@@ -921,7 +893,7 @@ def run(root_dir: str,
     logger.info("Objective initialisation...Done")
     # RUN THE SOLVER
     if opt == None:
-        opt = SolverFactory('ipopt', executable='/home/zico/lib/ipopt/build/bin/ipopt')
+        opt = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
         # solver options
         opt.options["print_level"] = 5
         opt.options["max_iter"] = 1000
@@ -1016,8 +988,8 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
     t0 = time()
     logger.info("Run reconstruction on all videos...")
     # Initialise the Ipopt solver.
-    opt = SolverFactory('ipopt',
-                        # executable='/home/zico/lib/ipopt/build/bin/ipopt'
+    opt = SolverFactory("ipopt",
+                        # executable="/home/zico/lib/ipopt/build/bin/ipopt"
                         )
     # solver options
     opt.options["print_level"] = 5
@@ -1029,7 +1001,8 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
     opt.options["OF_hessian_approximation"] = "limited-memory"
     opt.options["OF_accept_every_trial_step"] = "yes"
     opt.options["linear_solver"] = "ma86"
-    opt.options['OF_ma86_scaling'] = "none"
+    opt.options["OF_ma86_scaling"] = "none"
+    opt.options["OF_warm_start_init_point"] = "yes"
 
     if platform.python_implementation() == "PyPy":
         for test_dir in tqdm(test_videos):
@@ -1056,7 +1029,7 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
     logger.info(f"Run through all videos took {t1 - t0:.2f}s")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     root_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
     data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = data["test_dirs"]
@@ -1077,7 +1050,7 @@ if __name__ == '__main__':
         t0 = time()
         logger.info("Run reconstruction on all videos...")
         # Initialise the Ipopt solver.
-        opt = SolverFactory('ipopt', executable='/home/zico/lib/ipopt/build/bin/ipopt')
+        opt = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
         # solver options
         opt.options["print_level"] = 5
         opt.options["max_iter"] = 1000
@@ -1088,29 +1061,36 @@ if __name__ == '__main__':
         opt.options["OF_hessian_approximation"] = "limited-memory"
         opt.options["OF_accept_every_trial_step"] = "yes"
         opt.options["linear_solver"] = "ma86"
-        opt.options['OF_ma86_scaling'] = "none"
+        opt.options["OF_ma86_scaling"] = "none"
+        opt.options["OF_warm_start_init_point"] = "yes"
 
         for test in tqdm(tests):
-            dir = test.split("/cheetah_videos/")[1]
+            data_dir = test.split("/cheetah_videos/")[1]
             # Filter parameters based on past experience.
-            if dir in bad_videos:
+            if data_dir in bad_videos:
                 # Skip these videos because of erroneous input data.
                 continue
             start_frame = 1
             end_frame = -1
-            if dir in set(manually_selected_frames.keys()):
-                start_frame = manually_selected_frames[dir][0]
-                end_frame = manually_selected_frames[dir][1]
+            if data_dir in set(manually_selected_frames.keys()):
+                start_frame = manually_selected_frames[data_dir][0]
+                end_frame = manually_selected_frames[data_dir][1]
             try:
                 run(root_dir,
-                    dir,
+                    data_dir,
                     start_frame=start_frame,
                     end_frame=end_frame,
                     dlc_thresh=0.5,
                     opt=opt,
                     out_dir_prefix=out_dir_prefix)
             except:
-                run(root_dir, dir, start_frame=-1, end_frame=1, dlc_thresh=0.5, opt=opt, out_dir_prefix=out_dir_prefix)
+                run(root_dir,
+                    data_dir,
+                    start_frame=-1,
+                    end_frame=1,
+                    dlc_thresh=0.5,
+                    opt=opt,
+                    out_dir_prefix=out_dir_prefix)
 
         t1 = time()
         logger.info(f"Run through all videos took {t1 - t0:.2f}s")
@@ -1118,17 +1098,17 @@ if __name__ == '__main__':
         t0 = time()
         logger.info("Run 2D reprojections on all videos...")
         for test in tqdm(tests):
-            dir = test.split("/cheetah_videos/")[1]
+            data_dir = test.split("/cheetah_videos/")[1]
             # Filter parameters based on past experience.
-            if dir in bad_videos:
+            if data_dir in bad_videos:
                 # Skip these videos because of erroneous input data.
                 continue
             try:
                 if out_dir_prefix:
-                    out_dir = os.path.join(out_dir_prefix, dir, "fte_pw")
+                    out_dir = os.path.join(out_dir_prefix, data_dir, "fte_pw")
                 else:
-                    out_dir = os.path.join(root_dir, dir, "fte_pw")
-                video_fpaths = sorted(glob(os.path.join(root_dir, dir,
+                    out_dir = os.path.join(root_dir, data_dir, "fte_pw")
+                video_fpaths = sorted(glob(os.path.join(root_dir, data_dir,
                                                         "cam[1-9].mp4")))  # original vids should be in the parent dir
                 app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=0.5)
             except:
