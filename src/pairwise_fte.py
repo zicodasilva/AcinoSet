@@ -333,12 +333,10 @@ def run(root_dir: str,
         return u, v
 
     def pt3d_to_x2d(x, y, z, K, D, R, t):
-        u = pt3d_to_2d(x, y, z, K, D, R, t)[0]
-        return u
+        return pt3d_to_2d(x, y, z, K, D, R, t)[0]
 
     def pt3d_to_y2d(x, y, z, K, D, R, t):
-        v = pt3d_to_2d(x, y, z, K, D, R, t)[1]
-        return v
+        return pt3d_to_2d(x, y, z, K, D, R, t)[1]
 
     # ========= IMPORT DATA ========
     markers = misc.get_markers()
@@ -601,21 +599,10 @@ def run(root_dir: str,
             likelihood = val[base]
 
         # Filter measurements based on DLC threshold. This does ensures that badly predicted points are not considered in the objective function.
-        if likelihood > dlc_thresh:
-            return 1 / R_pw[w - 1][l - 1]
-        else:
-            return 0.0
+        return 1 / R_pw[w - 1][l - 1] if likelihood > dlc_thresh else 0.0
 
-    m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights,
-                                  mutable=True)  # IndexError: index 0 is out of bounds for axis 0 with size 0
-
-    def init_model_weights(m, p):
-        if Q[p - 1] != 0.0:
-            return 1 / Q[p - 1]
-        else:
-            return 0.0
-
-    m.model_err_weight = pyo.Param(m.P, initialize=init_model_weights)
+    m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)
+    m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, c, l, d2, w):
@@ -718,29 +705,18 @@ def run(root_dir: str,
 
     # INTEGRATION
     def backwards_euler_pos(m, n, p):  # position
-        if n > 1:
-            # return m.x[n,p] == m.x[n-1,p] + m.Ts*m.dx[n-1,p] + m.Ts**2 * m.ddx[n-1,p]/2
-            return m.x[n, p] == m.x[n - 1, p] + m.Ts * m.dx[n, p]
-
-        else:
-            return pyo.Constraint.Skip
+        return m.x[n, p] == m.x[n - 1, p] + m.Ts * m.dx[n, p] if n > 1 else pyo.Constraint.Skip
 
     m.integrate_p = pyo.Constraint(m.N, m.P, rule=backwards_euler_pos)
 
     def backwards_euler_vel(m, n, p):  # velocity
-        if n > 1:
-            return m.dx[n, p] == m.dx[n - 1, p] + m.Ts * m.ddx[n, p]
-        else:
-            return pyo.Constraint.Skip
+        return m.dx[n, p] == m.dx[n - 1, p] + m.Ts * m.ddx[n, p] if n > 1 else pyo.Constraint.Skip
 
     m.integrate_v = pyo.Constraint(m.N, m.P, rule=backwards_euler_vel)
 
     # MODEL
     def constant_acc(m, n, p):
-        if n > 1:
-            return m.ddx[n, p] == m.ddx[n - 1, p] + m.slack_model[n, p]
-        else:
-            return pyo.Constraint.Skip
+        return m.ddx[n, p] == m.ddx[n - 1, p] + m.slack_model[n, p] if n > 1 else pyo.Constraint.Skip
 
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
 
@@ -754,120 +730,37 @@ def run(root_dir: str,
     m.measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule=measurement_constraints)
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
-    #Head
-    def head_psi_0(m, n):
-        return abs(m.x[n, 4]) <= np.pi / 6
-
-    m.head_psi_0 = pyo.Constraint(m.N, rule=head_psi_0)
-
-    def head_theta_0(m, n):
-        return abs(m.x[n, 18]) <= np.pi / 6
-
-    m.head_theta_0 = pyo.Constraint(m.N, rule=head_theta_0)
-
-    #Neck
-    def neck_phi_1(m, n):
-        return abs(m.x[n, 5]) <= np.pi / 2
-
-    m.neck_phi_1 = pyo.Constraint(m.N, rule=neck_phi_1)
-
-    def neck_theta_1(m, n):
-        return abs(m.x[n, 19]) <= np.pi / 6
-
-    m.neck_theta_1 = pyo.Constraint(m.N, rule=neck_theta_1)
-
-    def neck_psi_1(m, n):
-        return abs(m.x[n, 33]) <= np.pi / 6
-
-    m.neck_psi_1 = pyo.Constraint(m.N, rule=neck_psi_1)
-
-    #Front torso
-    def front_torso_theta_2(m, n):
-        return abs(m.x[n, 20]) <= np.pi / 6
-
-    m.front_torso_theta_2 = pyo.Constraint(m.N, rule=front_torso_theta_2)
-
-    #Back torso
-    def back_torso_theta_3(m, n):
-        return abs(m.x[n, 21]) <= np.pi / 6
-
-    m.back_torso_theta_3 = pyo.Constraint(m.N, rule=back_torso_theta_3)
-
-    def back_torso_phi_3(m, n):
-        return abs(m.x[n, 7]) <= np.pi / 6
-
-    m.back_torso_phi_3 = pyo.Constraint(m.N, rule=back_torso_phi_3)
-
-    def back_torso_psi_3(m, n):
-        return abs(m.x[n, 35]) <= np.pi / 6
-
-    m.back_torso_psi_3 = pyo.Constraint(m.N, rule=back_torso_psi_3)
-
-    #Tail base
-    def tail_base_theta_4(m, n):
-        return abs(m.x[n, 22]) <= np.pi / 1.5
-
-    m.tail_base_theta_4 = pyo.Constraint(m.N, rule=tail_base_theta_4)
-
-    def tail_base_psi_4(m, n):
-        return abs(m.x[n, 36]) <= np.pi / 1.5
-
-    m.tail_base_psi_4 = pyo.Constraint(m.N, rule=tail_base_psi_4)
-
-    #Tail mid
-    def tail_mid_theta_5(m, n):
-        return abs(m.x[n, 23]) <= np.pi / 1.5
-
-    m.tail_mid_theta_5 = pyo.Constraint(m.N, rule=tail_mid_theta_5)
-
-    def tail_mid_psi_5(m, n):
-        return abs(m.x[n, 37]) <= np.pi / 1.5
-
-    m.tail_mid_psi_5 = pyo.Constraint(m.N, rule=tail_mid_psi_5)
-
-    #Front left leg
-    def l_shoulder_theta_6(m, n):
-        return abs(m.x[n, 24]) <= np.pi * 0.75
-
-    m.l_shoulder_theta_6 = pyo.Constraint(m.N, rule=l_shoulder_theta_6)
-
-    def l_front_knee_theta_7(m, n):
-        return abs(m.x[n, 25] + np.pi / 2) <= np.pi / 2
-
-    m.l_front_knee_theta_7 = pyo.Constraint(m.N, rule=l_front_knee_theta_7)
-
-    #Front right leg
-    def r_shoulder_theta_8(m, n):
-        return abs(m.x[n, 26]) <= np.pi * 0.75
-
-    m.r_shoulder_theta_8 = pyo.Constraint(m.N, rule=r_shoulder_theta_8)
-
-    def r_front_knee_theta_9(m, n):
-        return abs(m.x[n, 27] + np.pi / 2) <= np.pi / 2
-
-    m.r_front_knee_theta_9 = pyo.Constraint(m.N, rule=r_front_knee_theta_9)
-
-    #Back left leg
-    def l_hip_theta_10(m, n):
-        return abs(m.x[n, 28]) <= np.pi * 0.75
-
-    m.l_hip_theta_10 = pyo.Constraint(m.N, rule=l_hip_theta_10)
-
-    def l_back_knee_theta_11(m, n):
-        return abs(m.x[n, 29] - np.pi / 2) <= np.pi / 2
-
-    m.l_back_knee_theta_11 = pyo.Constraint(m.N, rule=l_back_knee_theta_11)
-
-    #Back right leg
-    def r_hip_theta_12(m, n):
-        return abs(m.x[n, 30]) <= np.pi * 0.75
-
-    m.r_hip_theta_12 = pyo.Constraint(m.N, rule=r_hip_theta_12)
-
-    def r_back_knee_theta_13(m, n):
-        return abs(m.x[n, 31] - np.pi / 2) <= np.pi / 2
-
-    m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=r_back_knee_theta_13)
+    # Head
+    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, 4], np.pi / 6))
+    m.head_theta_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, 18], np.pi / 6))
+    # Neck
+    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 2, m.x[n, 5], np.pi / 2))
+    m.neck_theta_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, 19], np.pi / 6))
+    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, 33], np.pi / 6))
+    # Front torso
+    m.front_torso_theta_2 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, 20], np.pi / 6))
+    # Back torso
+    m.back_torso_theta_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, 21], np.pi / 6))
+    m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, 7], np.pi / 6))
+    m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, 35], np.pi / 6))
+    # Tail base
+    m.tail_base_theta_4 = pyo.Constraint(m.N, rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, 22], (2 / 3) * np.pi))
+    m.tail_base_psi_4 = pyo.Constraint(m.N, rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, 36], (2 / 3) * np.pi))
+    # Tail mid
+    m.tail_mid_theta_5 = pyo.Constraint(m.N, rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, 23], (2 / 3) * np.pi))
+    m.tail_mid_psi_5 = pyo.Constraint(m.N, rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, 37], (2 / 3) * np.pi))
+    # Front left leg
+    m.l_shoulder_theta_6 = pyo.Constraint(m.N, rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, 24], (3 / 4) * np.pi))
+    m.l_front_knee_theta_7 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, 25], 0))
+    # Front right leg
+    m.r_shoulder_theta_8 = pyo.Constraint(m.N, rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, 26], (3 / 4) * np.pi))
+    m.r_front_knee_theta_9 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, 27], 0))
+    # Back left leg
+    m.l_hip_theta_10 = pyo.Constraint(m.N, rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, 28], (3 / 4) * np.pi))
+    m.l_back_knee_theta_11 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, 29], np.pi))
+    # Back right leg
+    m.r_hip_theta_12 = pyo.Constraint(m.N, rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, 30], (3 / 4) * np.pi))
+    m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, 31], np.pi))
 
     logger.info("Constaint initialisation...Done")
 
@@ -893,7 +786,9 @@ def run(root_dir: str,
     logger.info("Objective initialisation...Done")
     # RUN THE SOLVER
     if opt == None:
-        opt = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
+        opt = SolverFactory(
+            "ipopt",  #executable="/home/zico/lib/ipopt/build/bin/ipopt"
+        )
         # solver options
         opt.options["print_level"] = 5
         opt.options["max_iter"] = 1000
@@ -911,7 +806,7 @@ def run(root_dir: str,
     logger.info(f"Initialisation took {t1 - t0:.2f}s")
 
     t0 = time()
-    results = opt.solve(m, tee=True)
+    opt.solve(m, tee=True)
     t1 = time()
     logger.info(f"Optimisation solver took {t1 - t0:.2f}s")
 
@@ -958,7 +853,7 @@ def run(root_dir: str,
     # Remove model from memory to conserve memory usage.
     del m
 
-    out_fpath = os.path.join(out_dir, f"fte.pickle")
+    out_fpath = os.path.join(out_dir, "fte.pickle")
     app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
     app.save_3d_cheetah_as_2d(positions,
                               out_dir,
