@@ -44,16 +44,16 @@ def plot_cost_functions():
     redesc_c = 30
     r_x = np.arange(-100, 100, 1e-1)
     r_y1 = [misc.redescending_loss(i, redesc_a, redesc_b, redesc_c) for i in r_x]
-    r_y2 = [misc.redescending_smooth_loss(i, redesc_b, np.arctan) for i in r_x]
+    r_y2 = [misc.cauchy_loss(i, 7, np.log) for i in r_x]
     r_y3 = r_x**2
     r_y4 = [misc.fair_loss(i, redesc_b, np.log) for i in r_x]
     plt.figure()
-    plt.plot(r_x, r_y1, label='Redescending')
-    plt.plot(r_x, r_y2, label='Smooth Redescending')
-    plt.plot(r_x, r_y4, label='Fair')
-    plt.plot(r_x, r_y3, label='LSQ')
+    plt.plot(r_x, r_y1, label="Redescending")
+    plt.plot(r_x, r_y2, label="Cauchy")
+    plt.plot(r_x, r_y4, label="Fair")
+    plt.plot(r_x, r_y3, label="LSQ")
     ax = plt.gca()
-    ax.set_ylim((-5, 120))
+    ax.set_ylim((-5, 500))
     ax.legend()
     plt.show(block=True)
 
@@ -61,8 +61,8 @@ def plot_cost_functions():
 def loss_function(residual: float, loss="redescending"):
     if loss == "redescending":
         return misc.redescending_loss(residual, 3, 10, 20)
-    elif loss == "smooth_redescending":
-        return misc.redescending_smooth_loss(residual, 10, pyo.atan)
+    elif loss == "cauchy":
+        return misc.cauchy_loss(residual, 7, pyomo_log)
     elif loss == "fair":
         return misc.fair_loss(residual, 10, pyomo_log)
     elif loss == "lsq":
