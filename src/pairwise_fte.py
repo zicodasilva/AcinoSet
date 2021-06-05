@@ -19,6 +19,32 @@ from py_utils import data_ops, log
 logger = log.logger(__name__)
 
 
+def measurements_to_df(m: pyo.Model):
+    # Generate dataframe with the measurements that are used in the optimisation.
+    # This allows for inspection of the normal and pairwise predictions used in the FTE.
+    measurement_dir = os.path.join(out_dir, "measurements")
+    os.makedirs(measurement_dir, exist_ok=True)
+    xy_labels = ["x", "y"]
+    pd_index = pd.MultiIndex.from_product([markers, xy_labels], names=["bodyparts", "coords"])
+    for c in m.C:
+        for w in m.W:
+            included_measurements = []
+            for n in m.N:
+                included_measurements.append([])
+                for l in m.L:
+                    if m.meas_err_weight[n, c, l, w] != 0.0:
+                        included_measurements[n - 1].append([m.meas[n, c, l, 1, w], m.meas[n, c, l, 2, w]])
+                    else:
+                        included_measurements[n - 1].append([float("NaN"), float("NaN")])
+            measurements = np.array(included_measurements)
+            n_frames = len(measurements)
+            df = pd.DataFrame(measurements.reshape((n_frames, -1)),
+                              columns=pd_index,
+                              index=range(start_frame, start_frame + n_frames))
+            # df.to_csv(os.path.join(OUT_DIR, "measurements", f"cam{c}_fte.csv"))
+            df.to_hdf(os.path.join(measurement_dir, f"cam{c}_pw_{w}.h5"), "df_with_missing", format="table", mode="w")
+
+
 def get_vals_v(var: pyo.Var, idxs: list) -> np.ndarray:
     """
     Verbose version that doesn't try to guess stuff for ya. Usage:
@@ -621,34 +647,9 @@ def run(root_dir: str,
 
     m.meas = pyo.Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_measurements)
 
+    # Export measurements included in the optimisation to dataframe for further inspection - used for debugging.
     if export_measurements:
-        # Generate dataframe with the measurements that are used in the optimisation.
-        # This allows for inspection of the normal and pairwise predictions used in the FTE.
-        measurement_dir = os.path.join(out_dir, "measurements")
-        os.makedirs(measurement_dir, exist_ok=True)
-        xy_labels = ["x", "y"]
-        pd_index = pd.MultiIndex.from_product([markers, xy_labels], names=["bodyparts", "coords"])
-        for c in m.C:
-            for w in m.W:
-                included_measurements = []
-                for n in m.N:
-                    included_measurements.append([])
-                    for l in m.L:
-                        if m.meas_err_weight[n, c, l, w] != 0.0:
-                            included_measurements[n - 1].append([m.meas[n, c, l, 1, w], m.meas[n, c, l, 2, w]])
-                        else:
-                            included_measurements[n - 1].append([float("NaN"), float("NaN")])
-                measurements = np.array(included_measurements)
-                n_frames = len(measurements)
-                df = pd.DataFrame(measurements.reshape((n_frames, -1)),
-                                  columns=pd_index,
-                                  index=range(start_frame, start_frame + n_frames))
-                # df.to_csv(os.path.join(OUT_DIR, "measurements", f"cam{c}_fte.csv"))
-                df.to_hdf(os.path.join(measurement_dir, f"cam{c}_pw_{w}.h5"),
-                          "df_with_missing",
-                          format="table",
-                          mode="w")
-
+        measurements_to_df(m)
     logger.info("Measurement initialisation...Done")
     # ===== VARIABLES =====
     m.x = pyo.Var(m.N, m.P)  #position
