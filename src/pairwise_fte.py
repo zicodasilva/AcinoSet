@@ -14,6 +14,7 @@ from pyomo.opt import SolverFactory
 from lib import misc, utils, app
 from lib.calib import triangulate_points_fisheye, project_points_fisheye
 from py_utils import data_ops, log
+from all_optimizations import ekf
 
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
@@ -239,6 +240,7 @@ def run(root_dir: str,
         end_frame: int,
         dlc_thresh: float,
         loss="redescending",
+        init_ekf=False,
         opt=None,
         out_dir_prefix: str = None,
         generate_reprojection_videos: bool = False,
@@ -476,6 +478,10 @@ def run(root_dir: str,
 
     # estimate initial points
     logger.info("Estimate the initial trajectory")
+    if init_ekf:
+        ekf(os.path.join(os.path.dirname(out_dir)), points_2d_df, (K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, fps),
+            start_frame, end_frame, dlc_thresh, scene_fpath)
+
     # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
     frame_est = np.arange(end_frame)
 
@@ -660,19 +666,20 @@ def run(root_dir: str,
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
-    # state_indices = Q > 0
-    # ekf_states = data_ops.load_pickle(os.path.join(data_dir, "ekf", "ekf.pickle"))
     init_x = np.zeros((N, P))
-    init_x[:, 0] = x_est[start_frame:start_frame + N]  #x # change this to [start_frame: end_frame]?
-    init_x[:, 1] = y_est[start_frame:start_frame + N]  #y
-    init_x[:, 2] = z_est[start_frame:start_frame + N]  #z
-    # init_x[:, 31] = psi_est # yaw = psi
-    init_x[:, 31] = psi_est[start_frame:start_frame + N]  # yaw = psi
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
-    # init_x[:, state_indices] = ekf_states["x"]
-    # init_dx[:, state_indices] = ekf_states["dx"]
-    # init_ddx[:, state_indices] = ekf_states["ddx"]
+    if init_ekf:
+        state_indices = Q > 0
+        ekf_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "ekf", "ekf.pickle"))
+        init_x[:, state_indices] = ekf_states["smoothed_x"]
+        init_dx[:, state_indices] = ekf_states["smoothed_dx"]
+        init_ddx[:, state_indices] = ekf_states["smoothed_ddx"]
+    else:
+        init_x[:, 0] = x_est[start_frame:start_frame + N]  #x # change this to [start_frame: end_frame]?
+        init_x[:, 1] = y_est[start_frame:start_frame + N]  #y
+        init_x[:, 2] = z_est[start_frame:start_frame + N]  #z
+        init_x[:, 31] = psi_est[start_frame:start_frame + N]  # yaw = psi
     for n in m.N:
         for p in m.P:
             if n < len(init_x):  #init using known values
@@ -687,7 +694,6 @@ def run(root_dir: str,
         var_list = [m.x[n, p].value for p in range(1, P + 1)]
         for l in m.L:
             [pos] = pos_funcs[l - 1](*var_list)
-            # pos = pose_to_3d(*var_list)[l-1]
             for d3 in m.D3:
                 m.poses[n, l, d3].value = pos[d3 - 1]
 
