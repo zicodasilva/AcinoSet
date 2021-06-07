@@ -508,21 +508,18 @@ def run(root_dir: str,
     del points_3d_df
 
     # Obtain base and pairwise measurments. TODO: This is not technically required for the base measurements but it is a lot faster than using pandas for querying data.
-    data = {}
     pw_data = {}
     cam_idx = 0
     for path in df_paths:
-        dlc_df = pd.read_hdf(path)
-        pose_array = dlc_df.droplevel([0], axis=1).to_numpy()
-        data[cam_idx] = pose_array
         # Pairwise correspondence data.
         h5_filename = os.path.basename(path)
-        pw_data[cam_idx] = data_ops.load_pickle(os.path.join(dlc_dir, f"{h5_filename[:4]}-predictions.pickle"))
+        pw_data[cam_idx] = data_ops.load_pickle(
+            os.path.join(dlc_dir, f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
         cam_idx += 1
 
     # There has been a case where some camera view points have less frames than others. This can cause an issue when using automatic frame selection.
     # Therefore, ensure that the end frame is within range.
-    min_num_frames = min([len(val) for val in data.values()])
+    min_num_frames = min([len(val) for val in pw_data.values()])
     if end_frame > min_num_frames:
         end_frame = min_num_frames
         N = end_frame - start_frame
@@ -619,17 +616,14 @@ def run(root_dir: str,
     def init_meas_weights(m, n, c, l, w):
         # Determine if the current measurement is the base prediction or a pairwise prediction.
         marker = markers[l - 1]
+        values = pw_data[c - 1][(n - 1) + start_frame]
+        val = values["pose"][2::3]
         if w < 2:
-            values = data[c - 1][(n - 1) + start_frame]
-            val = values[2::3]
             base = index_dict[marker]
-            likelihood = val[base]
         else:
             base = pair_dict[marker][w - 2]
-            pw_values = pw_data[c - 1][(n - 1) + start_frame]
-            val = pw_values["pose"][2::3]
-            likelihood = val[base]
 
+        likelihood = val[base]
         # Filter measurements based on DLC threshold. This does ensures that badly predicted points are not considered in the objective function.
         return 1 / R_pw[w - 1][l - 1] if likelihood > dlc_thresh else 0.0
 
@@ -639,16 +633,15 @@ def run(root_dir: str,
     # ===== PARAMETERS =====
     def init_measurements(m, n, c, l, d2, w):
         # Determine if the current measurement is the base prediction or a pairwise prediction.
-        values = data[c - 1][(n - 1) + start_frame]
-        val = values[d2 - 1::3]
+        values = pw_data[c - 1][(n - 1) + start_frame]
+        val = values["pose"][d2 - 1::3]
         marker = markers[l - 1]
         if w < 2:
             base = index_dict[marker]
             return val[base]
         else:
             base = pair_dict[marker][w - 2]
-            pw_values = pw_data[c - 1][(n - 1) + start_frame]
-            val_pw = pw_values["pws"][:, :, :, d2 - 1]
+            val_pw = values["pws"][:, :, :, d2 - 1]
             return val[base] + val_pw[0, base, index_dict[marker]]
 
     m.meas = pyo.Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_measurements)
