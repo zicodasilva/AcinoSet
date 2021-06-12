@@ -55,12 +55,28 @@ def get_vals_v(var: pyo.Var, idxs: list) -> np.ndarray:
     return arr.reshape(*(len(i) for i in idxs))
 
 
-def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None):
+def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_reprojections=False):
     fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, "fte_pw", "fte.pickle")
-    app.plot_cheetah_reconstruction(fte_file, scene_fname=scene_fpath, reprojections=False, dark_mode=True)
+    app.plot_cheetah_reconstruction(fte_file, scene_fname=scene_fpath, reprojections=plot_reprojections, dark_mode=True)
+
+
+def compare_cheetahs(test_fte_file: str,
+                     root_dir: str,
+                     data_dir: str,
+                     out_dir_prefix: str = None,
+                     plot_reprojections=False):
+    fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
+    if out_dir_prefix is not None:
+        fte_file = os.path.join(out_dir_prefix, data_dir, "fte_pw", "fte.pickle")
+    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file],
+                                              scene_fname=scene_fpath,
+                                              reprojections=plot_reprojections,
+                                              dark_mode=True,
+                                              centered=True)
 
 
 def plot_cost_functions():
@@ -240,6 +256,7 @@ def run(root_dir: str,
         end_frame: int,
         dlc_thresh: float,
         loss="redescending",
+        single_view: int = 0,
         init_ekf=False,
         opt=None,
         out_dir_prefix: str = None,
@@ -250,9 +267,9 @@ def run(root_dir: str,
     t0 = time()
 
     if out_dir_prefix:
-        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw")
+        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw" if single_view == 0 else "fte_pw_1")
     else:
-        out_dir = os.path.join(root_dir, data_path, "fte_pw")
+        out_dir = os.path.join(root_dir, data_path, "fte_pw" if single_view == 0 else "fte_pw_1")
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
@@ -350,12 +367,12 @@ def run(root_dir: str,
         a = x_2d / z_2d
         b = y_2d / z_2d
         #fisheye params
-        r = (a**2 + b**2 + 1e-12)**0.5
+        r = (a**2 + b**2)**0.5
         th = pyo.atan(r)
         #distortion
         th_D = th * (1 + D[0] * th**2 + D[1] * th**4 + D[2] * th**6 + D[3] * th**8)
-        x_P = a * th_D / r
-        y_P = b * th_D / r
+        x_P = a * th_D / (r + 1e-12)
+        y_P = b * th_D / (r + 1e-12)
         u = K[0, 0] * x_P + K[0, 2]
         v = K[1, 1] * y_P + K[1, 2]
         return u, v
@@ -478,7 +495,7 @@ def run(root_dir: str,
 
     # estimate initial points
     logger.info("Estimate the initial trajectory")
-    if init_ekf:
+    if init_ekf and single_view == 0:
         ekf(os.path.join(os.path.dirname(out_dir)), points_2d_df, (K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, fps),
             start_frame, end_frame, dlc_thresh, scene_fpath)
 
@@ -542,6 +559,8 @@ def run(root_dir: str,
     P = 3 + 3 * 14  # + 3  # number of pose parameters (x, y, z, phi_1..n, theta_1..n, psi_1..n, x_l, y_l, z_l)
     L = len(markers)  # number of dlc labels per frame
     C = len(K_arr)  # number of cameras
+    if single_view > 0:
+        C = 1  # number of cameras
     D2 = 2  # dimensionality of measurements
     D3 = 3  # dimensionality of measurements
     W = 1  # Number of pairwise terms to include + the base measurement.
@@ -581,10 +600,29 @@ def run(root_dir: str,
         "r_back_paw": 10
     }
 
-    # pair_dict = {"r_eye":[23, 24], "l_eye":[23, 24], "nose":[6, 24], "neck_base":[6, 23], "spine":[22, 24], "tail_base":[6, 11], "tail1":[6, 22],
-    #  "tail2":[11, 22], "l_shoulder":[6, 24],"l_front_knee":[6, 24],"l_front_ankle":[6, 24],"r_shoulder":[6, 24],
-    #   "r_front_knee":[6, 24], "r_front_ankle":[6, 24],"l_hip":[6, 22],"l_back_knee":[6, 22], "l_back_ankle":[6, 22],
-    #    "r_hip":[6, 22],"r_back_knee":[6, 22],"r_back_ankle":[6, 22]}
+    # pair_dict = {
+    #     "r_eye": [23, 24],
+    #     "l_eye": [23, 24],
+    #     "nose": [6, 24],
+    #     "neck_base": [6, 23],
+    #     "spine": [22, 24],
+    #     "tail_base": [6, 11],
+    #     "tail1": [6, 22],
+    #     "tail2": [11, 22],
+    #     "l_shoulder": [6, 24],
+    #     "l_front_knee": [6, 24],
+    #     "l_front_ankle": [6, 24],
+    #     "r_shoulder": [6, 24],
+    #     "r_front_knee": [6, 24],
+    #     "r_front_ankle": [6, 24],
+    #     "l_hip": [6, 22],
+    #     "l_back_knee": [6, 22],
+    #     "l_back_ankle": [6, 22],
+    #     "r_hip": [6, 22],
+    #     "r_back_knee": [6, 22],
+    #     "r_back_ankle": [6, 22]
+    # }
+
     pair_dict = {
         "r_eye": [23, 1],
         "l_eye": [23, 0],
@@ -615,17 +653,17 @@ def run(root_dir: str,
     # ======= WEIGHTS =======
     def init_meas_weights(m, n, c, l, w):
         # Determine if the current measurement is the base prediction or a pairwise prediction.
+        cam_idx = single_view - 1 if single_view > 0 else c - 1
         marker = markers[l - 1]
-        values = pw_data[c - 1][(n - 1) + start_frame]
-        val = values["pose"][2::3]
+        values = pw_data[cam_idx][(n - 1) + start_frame]
+        likelihoods = values["pose"][2::3]
         if w < 2:
             base = index_dict[marker]
         else:
             base = pair_dict[marker][w - 2]
 
-        likelihood = val[base]
         # Filter measurements based on DLC threshold. This does ensures that badly predicted points are not considered in the objective function.
-        return 1 / R_pw[w - 1][l - 1] if likelihood > dlc_thresh else 0.0
+        return 1 / R_pw[w - 1][l - 1] if likelihoods[base] > dlc_thresh else 0.0
 
     m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
@@ -633,7 +671,8 @@ def run(root_dir: str,
     # ===== PARAMETERS =====
     def init_measurements(m, n, c, l, d2, w):
         # Determine if the current measurement is the base prediction or a pairwise prediction.
-        values = pw_data[c - 1][(n - 1) + start_frame]
+        cam_idx = single_view - 1 if single_view > 0 else c - 1
+        values = pw_data[cam_idx][(n - 1) + start_frame]
         val = values["pose"][d2 - 1::3]
         marker = markers[l - 1]
         if w < 2:
@@ -662,7 +701,13 @@ def run(root_dir: str,
     init_x = np.zeros((N, P))
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
-    if init_ekf:
+    if init_ekf and single_view > 0:
+        state_indices = Q > 0
+        ekf_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "fte_pw", "fte.pickle"))
+        init_x[:, state_indices] = ekf_states["x"]
+        init_dx[:, state_indices] = ekf_states["dx"]
+        init_ddx[:, state_indices] = ekf_states["ddx"]
+    elif init_ekf and single_view == 0:
         state_indices = Q > 0
         ekf_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "ekf", "ekf.pickle"))
         init_x[:, state_indices] = ekf_states["smoothed_x"]
@@ -723,7 +768,8 @@ def run(root_dir: str,
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
         #project
-        K, D, R, t = K_arr[c - 1], D_arr[c - 1], R_arr[c - 1], t_arr[c - 1]
+        cam_idx = single_view - 1 if single_view > 0 else c - 1
+        K, D, R, t = K_arr[cam_idx], D_arr[cam_idx], R_arr[cam_idx], t_arr[cam_idx]
         x, y, z = m.poses[n, l, 1], m.poses[n, l, 2], m.poses[n, l, 3]
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
 

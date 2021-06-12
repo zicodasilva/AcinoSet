@@ -1,0 +1,19 @@
+{
+    "python.languageServer": "Pylance",
+    "python.linting.pylintEnabled": true,
+    "editor.defaultFormatter": "ms-python.python",
+    "python.formatting.provider": "yapf",
+    "autoDocstring.docstringFormat": "google",
+    "python.formatting.yapfArgs": [
+        "--style={ column_limit: 120, indent_width: 4 }"
+    ],
+    "spellright.language": [
+        "en"
+    ],
+    "spellright.documentTypes": [
+        "markdown",
+        "latex",
+        "plaintext"
+    ],
+    "jupyter.jupyterServerType": "local",
+}
