@@ -20,11 +20,12 @@ from all_optimizations import ekf
 logger = log.logger(__name__)
 
 
-def measurements_to_df(m: pyo.Model):
+def measurements_to_df(m: pyo.ConcreteModel):
     # Generate dataframe with the measurements that are used in the optimisation.
     # This allows for inspection of the normal and pairwise predictions used in the FTE.
-    measurement_dir = os.path.join(out_dir, "measurements")
+    measurement_dir = os.path.join(out_directory, "measurements")
     os.makedirs(measurement_dir, exist_ok=True)
+    markers = misc.get_markers()
     xy_labels = ["x", "y"]
     pd_index = pd.MultiIndex.from_product([markers, xy_labels], names=["bodyparts", "coords"])
     for c in m.C:
@@ -41,7 +42,7 @@ def measurements_to_df(m: pyo.Model):
             n_frames = len(measurements)
             df = pd.DataFrame(measurements.reshape((n_frames, -1)),
                               columns=pd_index,
-                              index=range(start_frame, start_frame + n_frames))
+                              index=range(start, start + n_frames))
             # df.to_csv(os.path.join(OUT_DIR, "measurements", f"cam{c}_fte.csv"))
             df.to_hdf(os.path.join(measurement_dir, f"cam{c}_pw_{w}.h5"), "df_with_missing", format="table", mode="w")
 
@@ -170,8 +171,8 @@ def create_pose_functions(data_dir: str):
 
     # defines the position, velocities and accelerations in the inertial frame
     x, y, z = sp.symbols("x y z")
-    dx, dy, dz = sp.symbols("\\dot{x} \\dot{y} \\dot{z}")
-    ddx, ddy, ddz = sp.symbols("\\ddot{x} \\ddot{y} \\ddot{z}")
+    # dx, dy, dz = sp.symbols("\\dot{x} \\dot{y} \\dot{z}")
+    # ddx, ddy, ddz = sp.symbols("\\ddot{x} \\ddot{y} \\ddot{z}")
     # x_l, y_l, z_l = sp.symbols("x_l y_l z_l") # exclude lure for now
 
     # SYMBOLIC CHEETAH POSE POSITIONS
@@ -846,7 +847,7 @@ def run(root_dir: str,
         opt.options["OF_hessian_approximation"] = "limited-memory"
         opt.options["OF_accept_every_trial_step"] = "yes"
         opt.options["linear_solver"] = "ma86"
-        opt.options['OF_ma86_scaling'] = "none"
+        opt.options["OF_ma86_scaling"] = "none"
 
     logger.info("Setup optimisation - End")
     t1 = time()
@@ -913,9 +914,9 @@ def run(root_dir: str,
 
     # Create 2D reprojection videos.
     if generate_reprojection_videos:
-        video_fpaths = sorted(glob(os.path.join(root_dir, data_path,
-                                                "cam[1-9].mp4")))  # original vids should be in the parent dir
-        app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
+        video_paths = sorted(glob(os.path.join(root_dir, data_path,
+                                               "cam[1-9].mp4")))  # original vids should be in the parent dir
+        app.create_labeled_videos(video_paths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
     logger.info("Done")
 
@@ -958,24 +959,24 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
                 out_dir_prefix=out_dir_prefix)
     else:
         for test in tqdm(test_videos):
-            dir = test.split("/cheetah_videos/")[1]
+            directory = test.split("/cheetah_videos/")[1]
             if out_dir_prefix:
-                out_dir = os.path.join(out_dir_prefix, dir, "fte_pw")
+                out = os.path.join(out_dir_prefix, directory, "fte_pw")
             else:
-                out_dir = os.path.join(root_dir, dir, "fte_pw")
-            video_fpaths = sorted(glob(os.path.join(root_dir, dir,
-                                                    "cam[1-9].mp4")))  # original vids should be in the parent dir
-            app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=0.5)
+                out = os.path.join(root_dir, directory, "fte_pw")
+            video_paths = sorted(glob(os.path.join(root_dir, directory,
+                                                   "cam[1-9].mp4")))  # original vids should be in the parent dir
+            app.create_labeled_videos(video_paths, out_dir=out, draw_skeleton=True, pcutoff=0.5)
 
     t1 = time()
     logger.info(f"Run through all videos took {t1 - t0:.2f}s")
 
 
 if __name__ == "__main__":
-    root_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
-    data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
-    tests = data["test_dirs"]
-    out_dir_prefix = "/data/zico/CheetahResults/test_initial_estimate"
+    working_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
+    video_data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
+    tests = video_data["test_dirs"]
+    dir_prefix = "/data/zico/CheetahResults/test_initial_estimate"
     manually_selected_frames = {
         "2017_08_29/top/phantom/run1_1": (20, 170),
         "2019_03_03/menya/run": (20, 150),
@@ -989,72 +990,72 @@ if __name__ == "__main__":
     }
     bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1", "2017_12_17/top/zorro/flick1")
     if platform.python_implementation() == "PyPy":
-        t0 = time()
+        time0 = time()
         logger.info("Run reconstruction on all videos...")
         # Initialise the Ipopt solver.
-        opt = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
+        optimiser = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
         # solver options
-        opt.options["print_level"] = 5
-        opt.options["max_iter"] = 1000
-        opt.options["max_cpu_time"] = 10000
-        opt.options["Tol"] = 1e-1
-        opt.options["OF_print_timing_statistics"] = "yes"
-        opt.options["OF_print_frequency_time"] = 10
-        opt.options["OF_hessian_approximation"] = "limited-memory"
-        opt.options["OF_accept_every_trial_step"] = "yes"
-        opt.options["linear_solver"] = "ma86"
-        opt.options["OF_ma86_scaling"] = "none"
-        opt.options["OF_warm_start_init_point"] = "yes"
+        optimiser.options["print_level"] = 5
+        optimiser.options["max_iter"] = 1000
+        optimiser.options["max_cpu_time"] = 10000
+        optimiser.options["Tol"] = 1e-1
+        optimiser.options["OF_print_timing_statistics"] = "yes"
+        optimiser.options["OF_print_frequency_time"] = 10
+        optimiser.options["OF_hessian_approximation"] = "limited-memory"
+        optimiser.options["OF_accept_every_trial_step"] = "yes"
+        optimiser.options["linear_solver"] = "ma86"
+        optimiser.options["OF_ma86_scaling"] = "none"
+        optimiser.options["OF_warm_start_init_point"] = "yes"
 
-        for test in tqdm(tests):
-            data_dir = test.split("/cheetah_videos/")[1]
+        for test_vid in tqdm(tests):
+            current_dir = test_vid.split("/cheetah_videos/")[1]
             # Filter parameters based on past experience.
-            if data_dir in bad_videos:
+            if current_dir in bad_videos:
                 # Skip these videos because of erroneous input data.
                 continue
-            start_frame = 1
-            end_frame = -1
-            if data_dir in set(manually_selected_frames.keys()):
-                start_frame = manually_selected_frames[data_dir][0]
-                end_frame = manually_selected_frames[data_dir][1]
+            start = 1
+            end = -1
+            if current_dir in set(manually_selected_frames.keys()):
+                start = manually_selected_frames[current_dir][0]
+                end = manually_selected_frames[current_dir][1]
             try:
-                run(root_dir,
-                    data_dir,
-                    start_frame=start_frame,
-                    end_frame=end_frame,
+                run(working_dir,
+                    current_dir,
+                    start_frame=start,
+                    end_frame=end,
                     dlc_thresh=0.5,
-                    opt=opt,
-                    out_dir_prefix=out_dir_prefix)
+                    opt=optimiser,
+                    out_dir_prefix=dir_prefix)
             except:
-                run(root_dir,
-                    data_dir,
+                run(working_dir,
+                    current_dir,
                     start_frame=-1,
                     end_frame=1,
                     dlc_thresh=0.5,
-                    opt=opt,
-                    out_dir_prefix=out_dir_prefix)
+                    opt=optimiser,
+                    out_dir_prefix=dir_prefix)
 
-        t1 = time()
-        logger.info(f"Run through all videos took {t1 - t0:.2f}s")
+        time1 = time()
+        logger.info(f"Run through all videos took {time1 - time0:.2f}s")
     elif platform.python_implementation() == "CPython":
-        t0 = time()
+        time0 = time()
         logger.info("Run 2D reprojections on all videos...")
-        for test in tqdm(tests):
-            data_dir = test.split("/cheetah_videos/")[1]
+        for test_vid in tqdm(tests):
+            current_dir = test_vid.split("/cheetah_videos/")[1]
             # Filter parameters based on past experience.
-            if data_dir in bad_videos:
+            if current_dir in bad_videos:
                 # Skip these videos because of erroneous input data.
                 continue
             try:
-                if out_dir_prefix:
-                    out_dir = os.path.join(out_dir_prefix, data_dir, "fte_pw")
+                if dir_prefix:
+                    out_directory = os.path.join(dir_prefix, current_dir, "fte_pw")
                 else:
-                    out_dir = os.path.join(root_dir, data_dir, "fte_pw")
-                video_fpaths = sorted(glob(os.path.join(root_dir, data_dir,
+                    out_directory = os.path.join(working_dir, current_dir, "fte_pw")
+                video_fpaths = sorted(glob(os.path.join(working_dir, current_dir,
                                                         "cam[1-9].mp4")))  # original vids should be in the parent dir
-                app.create_labeled_videos(video_fpaths, out_dir=out_dir, draw_skeleton=True, pcutoff=0.5)
+                app.create_labeled_videos(video_fpaths, out_dir=out_directory, draw_skeleton=True, pcutoff=0.5)
             except:
                 continue
 
-        t1 = time()
-        logger.info(f"Video generation took {t1 - t0:.2f}s")
+        time1 = time()
+        logger.info(f"Video generation took {time1 - time0:.2f}s")
