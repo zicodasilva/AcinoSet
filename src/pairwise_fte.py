@@ -283,11 +283,11 @@ def run(root_dir: str,
 
     # ========= IMPORT CAMERA & SCENE PARAMS ========
     try:
-        K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
-    except:
+        k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
+    except Exception:
         logger.error("Early exit because extrinsic calibration files could not be located")
         return
-    D_arr = D_arr.reshape((-1, 4))
+    d_arr = d_arr.reshape((-1, 4))
 
     # load video info
     res, fps, num_frames = 0, 0, 0
@@ -342,7 +342,7 @@ def run(root_dir: str,
         # User-defined frames
         start_frame = start_frame - 1  # 0 based indexing
         end_frame = end_frame % num_frames + 1 if end_frame == -1 else end_frame
-    assert len(K_arr) == points_2d_df["camera"].nunique()
+    assert len(k_arr) == points_2d_df["camera"].nunique()
 
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
@@ -372,11 +372,11 @@ def run(root_dir: str,
         r = (a**2 + b**2)**0.5
         th = pyo.atan(r)
         #distortion
-        th_D = th * (1 + D[0] * th**2 + D[1] * th**4 + D[2] * th**6 + D[3] * th**8)
-        x_P = a * th_D / (r + 1e-12)
-        y_P = b * th_D / (r + 1e-12)
-        u = K[0, 0] * x_P + K[0, 2]
-        v = K[1, 1] * y_P + K[1, 2]
+        th_d = th * (1 + D[0] * th**2 + D[1] * th**4 + D[2] * th**6 + D[3] * th**8)
+        x_p = a * th_d / (r + 1e-12)
+        y_p = b * th_d / (r + 1e-12)
+        u = K[0, 0] * x_p + K[0, 2]
+        v = K[1, 1] * y_p + K[1, 2]
         return u, v
 
     def pt3d_to_x2d(x, y, z, K, D, R, t):
@@ -492,13 +492,13 @@ def run(root_dir: str,
     logger.info("Load H5 2D DLC prediction data")
     df_paths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
 
-    points_3d_df = utils.get_pairwise_3d_points_from_df(filtered_points_2d_df, K_arr, D_arr, R_arr, t_arr,
+    points_3d_df = utils.get_pairwise_3d_points_from_df(filtered_points_2d_df, k_arr, d_arr, r_arr, t_arr,
                                                         triangulate_points_fisheye)
 
     # estimate initial points
     logger.info("Estimate the initial trajectory")
     if init_ekf and single_view == 0:
-        ekf(os.path.join(os.path.dirname(out_dir)), points_2d_df, (K_arr, D_arr, R_arr, t_arr, cam_res, n_cams, fps),
+        ekf(os.path.join(os.path.dirname(out_dir)), points_2d_df, (k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, fps),
             start_frame, end_frame, dlc_thresh, scene_fpath)
 
     # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
@@ -526,7 +526,7 @@ def run(root_dir: str,
     del filtered_points_2d_df
     del points_3d_df
 
-    # Obtain base and pairwise measurments. TODO: This is not technically required for the base measurements but it is a lot faster than using pandas for querying data.
+    # Obtain base and pairwise measurments.
     pw_data = {}
     cam_idx = 0
     for path in df_paths:
@@ -536,7 +536,8 @@ def run(root_dir: str,
             os.path.join(dlc_dir, f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
         cam_idx += 1
 
-    # There has been a case where some camera view points have less frames than others. This can cause an issue when using automatic frame selection.
+    # There has been a case where some camera view points have less frames than others.
+    # This can cause an issue when using automatic frame selection.
     # Therefore, ensure that the end frame is within range.
     min_num_frames = min([len(val) for val in pw_data.values()])
     if end_frame > min_num_frames:
@@ -560,20 +561,19 @@ def run(root_dir: str,
     # ===== SETS =====
     P = 3 + 3 * 14  # + 3  # number of pose parameters (x, y, z, phi_1..n, theta_1..n, psi_1..n, x_l, y_l, z_l)
     L = len(markers)  # number of dlc labels per frame
-    C = len(K_arr)  # number of cameras
+    C = len(k_arr)  # number of cameras
     if single_view > 0:
         C = 1  # number of cameras
-    D2 = 2  # dimensionality of measurements
-    D3 = 3  # dimensionality of measurements
-    W = 1  # Number of pairwise terms to include + the base measurement.
 
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
     m.L = pyo.RangeSet(L)
     m.C = pyo.RangeSet(C)
-    m.D2 = pyo.RangeSet(D2)
-    m.D3 = pyo.RangeSet(D3)
-    m.W = pyo.RangeSet(W)
+    # Dimensionality of measurements
+    m.D2 = pyo.RangeSet(2)
+    m.D3 = pyo.RangeSet(3)
+    # Number of pairwise terms to include + the base measurement.
+    m.W = pyo.RangeSet(1)
 
     index_dict = {
         "nose": 23,
@@ -664,7 +664,8 @@ def run(root_dir: str,
         else:
             base = pair_dict[marker][w - 2]
 
-        # Filter measurements based on DLC threshold. This does ensures that badly predicted points are not considered in the objective function.
+        # Filter measurements based on DLC threshold.
+        # This does ensures that badly predicted points are not considered in the objective function.
         return 1 / R_pw[w - 1][l - 1] if likelihoods[base] > dlc_thresh else 0.0
 
     m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)
@@ -771,7 +772,7 @@ def run(root_dir: str,
     def measurement_constraints(m, n, c, l, d2, w):
         #project
         cam_idx = single_view - 1 if single_view > 0 else c - 1
-        K, D, R, t = K_arr[cam_idx], D_arr[cam_idx], R_arr[cam_idx], t_arr[cam_idx]
+        K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
         x, y, z = m.poses[n, l, 1], m.poses[n, l, 2], m.poses[n, l, 3]
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
 
@@ -833,7 +834,7 @@ def run(root_dir: str,
 
     logger.info("Objective initialisation...Done")
     # RUN THE SOLVER
-    if opt == None:
+    if opt is None:
         opt = SolverFactory(
             "ipopt",  #executable="/home/zico/lib/ipopt/build/bin/ipopt"
         )
@@ -1026,7 +1027,7 @@ if __name__ == "__main__":
                     dlc_thresh=0.5,
                     opt=optimiser,
                     out_dir_prefix=dir_prefix)
-            except:
+            except Exception:
                 run(working_dir,
                     current_dir,
                     start_frame=-1,
@@ -1054,7 +1055,7 @@ if __name__ == "__main__":
                 video_fpaths = sorted(glob(os.path.join(working_dir, current_dir,
                                                         "cam[1-9].mp4")))  # original vids should be in the parent dir
                 app.create_labeled_videos(video_fpaths, out_dir=out_directory, draw_skeleton=True, pcutoff=0.5)
-            except:
+            except Exception:
                 continue
 
         time1 = time()
