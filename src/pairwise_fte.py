@@ -67,7 +67,8 @@ def compare_cheetahs(test_fte_file: str,
                      root_dir: str,
                      data_dir: str,
                      out_dir_prefix: str = None,
-                     plot_reprojections=False):
+                     plot_reprojections=False,
+                     centered=False):
     fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
@@ -76,7 +77,7 @@ def compare_cheetahs(test_fte_file: str,
                                               scene_fname=scene_fpath,
                                               reprojections=plot_reprojections,
                                               dark_mode=True,
-                                              centered=True)
+                                              centered=centered)
 
 
 def plot_cost_functions():
