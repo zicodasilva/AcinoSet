@@ -56,12 +56,12 @@ def get_vals_v(var: pyo.Var, idxs: list) -> np.ndarray:
     return arr.reshape(*(len(i) for i in idxs))
 
 
-def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_reprojections=False):
+def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_reprojections=False, centered=False):
     fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, "fte_pw", "fte.pickle")
-    app.plot_cheetah_reconstruction(fte_file, scene_fname=scene_fpath, reprojections=plot_reprojections, dark_mode=True)
+    app.plot_cheetah_reconstruction(fte_file, scene_fname=scene_fpath, reprojections=plot_reprojections, dark_mode=True, centered=centered)
 
 
 def compare_cheetahs(test_fte_file: str,
@@ -886,10 +886,12 @@ def run(root_dir: str,
         model_err = get_vals_v(m.slack_model, [m.N, m.P])
         meas_err = get_vals_v(m.slack_meas, [m.N, m.C, m.L, m.D2, m.W])
         meas_weight = get_vals_v(m.meas_err_weight, [m.N, m.C, m.L, m.W])
+        v_vec = [np.arctan2(dx_optimised[n-1][1], dx_optimised[n-1][0]) for n in m.N]
 
         states = dict(x=x_optimised,
                       dx=dx_optimised,
                       ddx=ddx_optimised,
+                      velocity_vector=v_vec,
                       model_err=model_err,
                       model_weight=model_weight,
                       meas_err=meas_err.squeeze(),
