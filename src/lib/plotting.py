@@ -203,10 +203,10 @@ class Cheetah(Animation):
 
         # indices correspond to joints in 'markers' variable
         lines_idxs = [0,1,0,2,1,2,1,3,0,3,2,3,3,4,4,5,5,6,6,7,
-                      3,8,4,8,8,9,9,10,      # left front leg
-                      3,11,4,11,11,12,12,13, # right front leg
-                      4,14,5,14,14,15,15,16,
-                      4,17,5,17,17,18,18,19]
+                      3,8,4,8,8,9,9,10,10,11, # right front leg
+                      3,12,4,12,12,13,13,14,14,15, # left front leg
+                      4,16,5,16,16,17,17,18,18,19, # right back leg
+                      4,20,5,20,20,21,21,22,22,23] # left back leg
 
         colours = [[self.dark_mode]*3+[1], # white if dark_mode else black
                    [1,0,1,1],              # fuchsia/magenta

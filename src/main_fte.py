@@ -136,7 +136,7 @@ def create_pose_functions(data_dir: str):
         pos_funcs.append(lamb)
 
     # Save the functions to file.
-    data_ops.save_dill(os.path.join(data_dir, "pose_3d_functions.pickle"), (pose_to_3d, pos_funcs))
+    data_ops.save_dill(os.path.join(data_dir, "pose_3d_functions_with_paws.pickle"), (pose_to_3d, pos_funcs))
 
 
 def run(root_dir: str,
@@ -245,7 +245,7 @@ def run(root_dir: str,
         N = end_frame - start_frame
 
     ## ========= POSE FUNCTIONS ========
-    pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "pose_3d_functions.pickle"))
+    pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "pose_3d_functions_with_paws.pickle"))
     idx = misc.get_pose_params()
     sym_list = sp.symbols(list(idx.keys()))
 
@@ -292,30 +292,30 @@ def run(root_dir: str,
             3.47,  # r_shoulder
             2.75,  # r_front_knee
             2.69,  # r_front_ankle
-            # 2.24, # r_front_paw
+            2.24,  # r_front_paw
             3.4,  # l_shoulder
             2.91,  # l_front_knee
             2.85,  # l_front_ankle
-            # 2.27, # l_front_paw
+            2.27,  # l_front_paw
             3.26,  # r_hip
             2.76,  # r_back_knee
             2.33,  # r_back_ankle
-            # 2.4, # r_back_paw
+            2.4,  # r_back_paw
             3.53,  # l_hip
             2.69,  # l_back_knee
             2.49,  # l_back_ankle
-            # 2.34, # l_back_paw
+            2.34,  # l_back_paw
         ],
         dtype=float)
     R_pw = np.array([
         R,
         [
-            2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 5.18, 5.28, 5.5, 4.7, 4.7, 5.21, 5.1, 5.27,
-            5.75
+            2.71, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.01, 5.11, 5.24, 4.85, 5.18, 5.28, 5.5, 4.9, 4.7, 4.7, 5.21,
+            5.11, 5.1, 5.27, 5.75, 5.44
         ],
         [
-            2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 8.83, 6.52, 6.22, 6.8, 6.12, 5.37, 7.83, 6.44,
-            6.1
+            2.8, 3.24, 3.42, 3.8, 4.4, 5.43, 5.22, 7.29, 8.19, 6.5, 5.9, 6.18, 8.83, 6.52, 6.22, 6.34, 6.8, 6.12, 5.37,
+            5.98, 7.83, 6.44, 6.1, 6.38
         ]
     ],
                     dtype=float)
@@ -339,16 +339,20 @@ def run(root_dir: str,
         34,  # back torso
         90,
         43,  # tail_base
-        118,
-        51,  # tail_mid
-        247,
-        186,  # l_shoulder, l_front_knee
-        194,
-        164,  # r_shoulder, r_front_knee
-        295,
-        243,  # l_hip, l_back_knee
-        334,
-        149  # r_hip, r_back_knee
+        118,  # tail_mid
+        51,
+        247,  # l_shoulder
+        186,  # l_front_knee
+        194,  # r_shoulder
+        164,  # r_front_knee
+        295,  # l_hip
+        243,  # l_back_knee
+        334,  # r_hip
+        149,  # r_back_knee
+        250,  # l_front_ankle
+        250,  # r_front_ankle
+        250,  # l_back_ankle
+        250  # r_back_ankle
     ]
     Q = np.array(Q, dtype=float)**2
 
@@ -560,7 +564,7 @@ def run(root_dir: str,
         #project
         cam_idx = single_view - 1 if single_view > 0 else c - 1
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
-        x, y, z = m.poses[n, l, pyo_i(idx["x_0"])], m.poses[n, l, pyo_i(idx["y_0"])], m.poses[n, l, pyo_i(idx["z_0"])]
+        x, y, z = m.poses[n, l, 1], m.poses[n, l, 2], m.poses[n, l, 3]
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
 
     m.measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule=measurement_constraints)
@@ -613,7 +617,16 @@ def run(root_dir: str,
     m.r_hip_theta_12 = pyo.Constraint(m.N,
                                       rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_12"])],
                                                          (3 / 4) * np.pi))
+
     m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_13"])], np.pi))
+    m.l_front_ankle_theta_14 = pyo.Constraint(m.N,
+                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_14"])], np.pi / 2))
+    m.r_front_ankle_theta_15 = pyo.Constraint(m.N,
+                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_15"])], np.pi / 2))
+    m.l_back_ankle_theta_16 = pyo.Constraint(m.N,
+                                             rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_16"])], 0))
+    m.r_back_ankle_theta_17 = pyo.Constraint(m.N,
+                                             rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_17"])], 0))
 
     logger.info("Constaint initialisation...Done")
 
@@ -644,7 +657,7 @@ def run(root_dir: str,
         )
         # solver options
         opt.options["print_level"] = 5
-        opt.options["max_iter"] = 1000
+        opt.options["max_iter"] = 500
         opt.options["max_cpu_time"] = 10000
         opt.options["Tol"] = 1e-1
         opt.options["OF_print_timing_statistics"] = "yes"
@@ -722,7 +735,7 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
                         )
     # solver options
     opt.options["print_level"] = 5
-    opt.options["max_iter"] = 1000
+    opt.options["max_iter"] = 500
     opt.options["max_cpu_time"] = 10000
     opt.options["Tol"] = 1e-1
     opt.options["OF_print_timing_statistics"] = "yes"
@@ -782,7 +795,7 @@ if __name__ == "__main__":
         optimiser = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
         # solver options
         optimiser.options["print_level"] = 5
-        optimiser.options["max_iter"] = 1000
+        optimiser.options["max_iter"] = 500
         optimiser.options["max_cpu_time"] = 10000
         optimiser.options["Tol"] = 1e-1
         optimiser.options["OF_print_timing_statistics"] = "yes"
