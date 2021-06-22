@@ -290,7 +290,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
 
     logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
     ## ========= POSE FUNCTIONS ========
-    pose_to_3d, pos_funcs = data_ops.load_data(os.path.join(root_dir, "pose_3d_paws_included.pickle"))
+    pose_to_3d, pos_funcs = data_ops.load_pickle(os.path.join(root_dir, "pose_3d_paws_included.pickle"))
 
     # ========= PROJECTION FUNCTIONS ========
     def pt3d_to_2d(x, y, z, K, D, R, t):
@@ -737,7 +737,7 @@ def run(root_dir: str, data_path: str, start_frame: int, end_frame: int, dlc_thr
     if opt == None:
         opt = SolverFactory(
             'ipopt',
-            executable='/home/zico/lib/ipopt/build/bin/ipopt'
+            # executable='/home/zico/lib/ipopt/build/bin/ipopt'
         )
         # solver options
         opt.options["print_level"] = 5
