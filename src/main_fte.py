@@ -307,8 +307,6 @@ def run(root_dir: str,
             # 2.34, # l_back_paw
         ],
         dtype=float)
-    # R_pw = np.array([R, [5.13, 3.06, 2.99, 4.07, 5.53, 4.67, 6.05, 5.6, 5.43, 5.39, 6.34, 6.53, 6.14, 6.54, 5.35, 5.33, 6.24, 6.91, 5.8, 6.6],
-    # [4.3, 4.72, 4.9, 3.8, 4.4, 5.43, 5.22, 7.29, 5.39, 5.72, 6.01, 6.83, 6.32, 6.27, 5.81, 6.19, 6.22, 7.15, 6.98, 6.5]], dtype=float)
     R_pw = np.array([
         R,
         [
@@ -439,82 +437,8 @@ def run(root_dir: str,
     # Number of pairwise terms to include + the base measurement.
     m.W = pyo.RangeSet(1)
 
-    index_dict = {
-        "nose": 23,
-        "r_eye": 0,
-        "l_eye": 1,
-        "neck_base": 24,
-        "spine": 6,
-        "tail_base": 22,
-        "tail1": 11,
-        "tail2": 12,
-        "l_shoulder": 13,
-        "l_front_knee": 14,
-        "l_front_ankle": 15,
-        "l_front_paw": 16,
-        "r_shoulder": 2,
-        "r_front_knee": 3,
-        "r_front_ankle": 4,
-        "r_front_paw": 5,
-        "l_hip": 17,
-        "l_back_knee": 18,
-        "l_back_ankle": 19,
-        "l_back_paw": 20,
-        "r_hip": 7,
-        "r_back_knee": 8,
-        "r_back_ankle": 9,
-        "r_back_paw": 10
-    }
-
-    # pair_dict = {
-    #     "r_eye": [23, 24],
-    #     "l_eye": [23, 24],
-    #     "nose": [6, 24],
-    #     "neck_base": [6, 23],
-    #     "spine": [22, 24],
-    #     "tail_base": [6, 11],
-    #     "tail1": [6, 22],
-    #     "tail2": [11, 22],
-    #     "l_shoulder": [6, 24],
-    #     "l_front_knee": [6, 24],
-    #     "l_front_ankle": [6, 24],
-    #     "r_shoulder": [6, 24],
-    #     "r_front_knee": [6, 24],
-    #     "r_front_ankle": [6, 24],
-    #     "l_hip": [6, 22],
-    #     "l_back_knee": [6, 22],
-    #     "l_back_ankle": [6, 22],
-    #     "r_hip": [6, 22],
-    #     "r_back_knee": [6, 22],
-    #     "r_back_ankle": [6, 22]
-    # }
-
-    pair_dict = {
-        "r_eye": [23, 1],
-        "l_eye": [23, 0],
-        "nose": [0, 1],
-        "neck_base": [6, 23],
-        "spine": [22, 24],
-        "tail_base": [6, 11],
-        "tail1": [6, 22],
-        "tail2": [11, 22],
-        "l_shoulder": [14, 24],
-        "l_front_knee": [13, 15],
-        "l_front_ankle": [13, 14],
-        "l_front_paw": [14, 15],
-        "r_shoulder": [3, 24],
-        "r_front_knee": [2, 4],
-        "r_front_ankle": [2, 3],
-        "r_front_paw": [3, 4],
-        "l_hip": [18, 22],
-        "l_back_knee": [17, 19],
-        "l_back_ankle": [17, 18],
-        "l_back_paw": [18, 19],
-        "r_hip": [8, 22],
-        "r_back_knee": [7, 9],
-        "r_back_ankle": [7, 8],
-        "r_back_paw": [8, 9]
-    }
+    index_dict = misc.get_dlc_marker_indices()
+    pair_dict = misc.get_pairwise_graph()
 
     # ======= WEIGHTS =======
     def init_meas_weights(m, n, c, l, w):

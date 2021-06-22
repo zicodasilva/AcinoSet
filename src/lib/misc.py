@@ -5,42 +5,164 @@ import sympy as sp
 
 def get_markers():
     return [
-        'nose', 'r_eye', 'l_eye', 'neck_base',
-        'spine', 'tail_base', 'tail1', 'tail2',
-        'r_shoulder', 'r_front_knee', 'r_front_ankle', #'r_front_paw',
-        'l_shoulder', 'l_front_knee', 'l_front_ankle', #'l_front_paw',
-        'r_hip', 'r_back_knee', 'r_back_ankle', #'r_back_paw',
-        'l_hip', 'l_back_knee', 'l_back_ankle', #'l_back_paw',
-        # 'lure'
-    ]   # excludes paws & lure for now!
+        'nose',
+        'r_eye',
+        'l_eye',
+        'neck_base',
+        'spine',
+        'tail_base',
+        'tail1',
+        'tail2',
+        'r_shoulder',
+        'r_front_knee',
+        'r_front_ankle',  #'r_front_paw',
+        'l_shoulder',
+        'l_front_knee',
+        'l_front_ankle',  #'l_front_paw',
+        'r_hip',
+        'r_back_knee',
+        'r_back_ankle',  #'r_back_paw',
+        'l_hip',
+        'l_back_knee',
+        'l_back_ankle',  #'l_back_paw',
+    ]
+
+
+def get_dlc_marker_indices():
+    return {
+        "nose": 23,
+        "r_eye": 0,
+        "l_eye": 1,
+        "neck_base": 24,
+        "spine": 6,
+        "tail_base": 22,
+        "tail1": 11,
+        "tail2": 12,
+        "l_shoulder": 13,
+        "l_front_knee": 14,
+        "l_front_ankle": 15,
+        "l_front_paw": 16,
+        "r_shoulder": 2,
+        "r_front_knee": 3,
+        "r_front_ankle": 4,
+        "r_front_paw": 5,
+        "l_hip": 17,
+        "l_back_knee": 18,
+        "l_back_ankle": 19,
+        "l_back_paw": 20,
+        "r_hip": 7,
+        "r_back_knee": 8,
+        "r_back_ankle": 9,
+        "r_back_paw": 10
+    }
 
 
 def get_skeleton():
     return [
-        ['nose', 'l_eye'], ['nose', 'r_eye'], ['nose', 'neck_base'], ['l_eye', 'neck_base'], ['r_eye', 'neck_base'],
-        ['neck_base', 'spine'], ['spine', 'tail_base'], ['tail_base', 'tail1'], ['tail1', 'tail2'],
-        ['neck_base', 'r_shoulder'], ['r_shoulder', 'r_front_knee'], ['r_front_knee', 'r_front_ankle'], #['r_front_ankle', 'r_front_paw'],
-        ['neck_base', 'l_shoulder'], ['l_shoulder', 'l_front_knee'], ['l_front_knee', 'l_front_ankle'], #['l_front_ankle', 'l_front_paw'],
-        ['tail_base', 'r_hip'], ['r_hip', 'r_back_knee'], ['r_back_knee', 'r_back_ankle'], #['r_back_ankle', 'r_back_paw'],
-        ['tail_base', 'l_hip'], ['l_hip', 'l_back_knee'], ['l_back_knee', 'l_back_ankle'], #['l_back_ankle', 'l_back_paw']
-    ]   # exludes paws for now!
+        ['nose', 'l_eye'],
+        ['nose', 'r_eye'],
+        ['nose', 'neck_base'],
+        ['l_eye', 'neck_base'],
+        ['r_eye', 'neck_base'],
+        ['neck_base', 'spine'],
+        ['spine', 'tail_base'],
+        ['tail_base', 'tail1'],
+        ['tail1', 'tail2'],
+        ['neck_base', 'r_shoulder'],
+        ['r_shoulder', 'r_front_knee'],
+        ['r_front_knee', 'r_front_ankle'],  #['r_front_ankle', 'r_front_paw'],
+        ['neck_base', 'l_shoulder'],
+        ['l_shoulder', 'l_front_knee'],
+        ['l_front_knee', 'l_front_ankle'],  #['l_front_ankle', 'l_front_paw'],
+        ['tail_base', 'r_hip'],
+        ['r_hip', 'r_back_knee'],
+        ['r_back_knee', 'r_back_ankle'],  #['r_back_ankle', 'r_back_paw'],
+        ['tail_base', 'l_hip'],
+        ['l_hip', 'l_back_knee'],
+        ['l_back_knee', 'l_back_ankle'],  #['l_back_ankle', 'l_back_paw']
+    ]
 
 
 def get_pose_params():
-    states = ['x_0', 'y_0', 'z_0',         # head position in inertial
-              'phi_0', 'theta_0', 'psi_0', # head rotation in inertial
-              'phi_1', 'theta_1', 'psi_1', # neck
-              'theta_2',                   # front torso
-              'phi_3', 'theta_3', 'psi_3', # back torso
-              'theta_4', 'psi_4',          # tail_base
-              'theta_5', 'psi_5',          # tail_mid
-              'theta_6', 'theta_7',        # l_shoulder, l_front_knee
-              'theta_8', 'theta_9',        # r_shoulder, r_front_knee
-              'theta_10', 'theta_11',      # l_hip, l_back_knee
-              'theta_12', 'theta_13',      # r_hip, r_back_knee
-#               'x_l', 'y_l', 'z_l'          # lure position in inertial
-             ] # exludes paws & lure for now!
+    states = [
+        'x_0',
+        'y_0',
+        'z_0',  # head position in inertial
+        'phi_0',
+        'theta_0',
+        'psi_0',  # head rotation in inertial
+        'phi_1',
+        'theta_1',
+        'psi_1',  # neck
+        'theta_2',  # front torso
+        'phi_3',
+        'theta_3',
+        'psi_3',  # back torso
+        'theta_4',
+        'psi_4',  # tail_base
+        'theta_5',
+        'psi_5',  # tail_mid
+        'theta_6',
+        'theta_7',  # l_shoulder, l_front_knee
+        'theta_8',
+        'theta_9',  # r_shoulder, r_front_knee
+        'theta_10',
+        'theta_11',  # l_hip, l_back_knee
+        'theta_12',
+        'theta_13',  # r_hip, r_back_knee
+    ]
     return dict(zip(states, range(len(states))))
+
+
+def get_pairwise_graph():
+    return {
+        "r_eye": [23, 1],
+        "l_eye": [23, 0],
+        "nose": [0, 1],
+        "neck_base": [6, 23],
+        "spine": [22, 24],
+        "tail_base": [6, 11],
+        "tail1": [6, 22],
+        "tail2": [11, 22],
+        "l_shoulder": [14, 24],
+        "l_front_knee": [13, 15],
+        "l_front_ankle": [13, 14],
+        "l_front_paw": [14, 15],
+        "r_shoulder": [3, 24],
+        "r_front_knee": [2, 4],
+        "r_front_ankle": [2, 3],
+        "r_front_paw": [3, 4],
+        "l_hip": [18, 22],
+        "l_back_knee": [17, 19],
+        "l_back_ankle": [17, 18],
+        "l_back_paw": [18, 19],
+        "r_hip": [8, 22],
+        "r_back_knee": [7, 9],
+        "r_back_ankle": [7, 8],
+        "r_back_paw": [8, 9]
+    }
+    # return {
+    #     "r_eye": [23, 24],
+    #     "l_eye": [23, 24],
+    #     "nose": [6, 24],
+    #     "neck_base": [6, 23],
+    #     "spine": [22, 24],
+    #     "tail_base": [6, 11],
+    #     "tail1": [6, 22],
+    #     "tail2": [11, 22],
+    #     "l_shoulder": [6, 24],
+    #     "l_front_knee": [6, 24],
+    #     "l_front_ankle": [6, 24],
+    #     "r_shoulder": [6, 24],
+    #     "r_front_knee": [6, 24],
+    #     "r_front_ankle": [6, 24],
+    #     "l_hip": [6, 22],
+    #     "l_back_knee": [6, 22],
+    #     "l_back_ankle": [6, 22],
+    #     "r_hip": [6, 22],
+    #     "r_back_knee": [6, 22],
+    #     "r_back_ankle": [6, 22]
+    # }
 
 
 def get_3d_marker_coords(x):
@@ -51,106 +173,120 @@ def get_3d_marker_coords(x):
     func = sp.Matrix if isinstance(x[0], sp.Expr) else np.array
 
     # rotations
-    RI_0  = rot_z(x[idx['psi_0']]) @ rot_x(x[idx['phi_0']]) @ rot_y(x[idx['theta_0']])         # head
-    R0_I  = RI_0.T
-    RI_1  = rot_z(x[idx['psi_1']]) @ rot_x(x[idx['phi_1']]) @ rot_y(x[idx['theta_1']]) @ RI_0  # neck
-    R1_I  = RI_1.T
-    RI_2  = rot_y(x[idx['theta_2']]) @ RI_1                                                    # front torso
-    R2_I  = RI_2.T
-    RI_3  = rot_z(x[idx['psi_3']]) @ rot_x(x[idx['phi_3']]) @ rot_y(x[idx['theta_3']]) @ RI_2  # back torso
-    R3_I  = RI_3.T
-    RI_4  = rot_z(x[idx['psi_4']]) @ rot_y(x[idx['theta_4']]) @ RI_3                           # tail base
-    R4_I  = RI_4.T
-    RI_5  = rot_z(x[idx['psi_5']]) @ rot_y(x[idx['theta_5']]) @ RI_4                           # tail mid
-    R5_I  = RI_5.T
-    RI_6  = rot_y(x[idx['theta_6']]) @ RI_2                                                    # l_shoulder
-    R6_I  = RI_6.T
-    RI_7  = rot_y(x[idx['theta_7']]) @ RI_6                                                    # l_front_knee
-    R7_I  = RI_7.T
-    RI_8  = rot_y(x[idx['theta_8']]) @ RI_2                                                    # r_shoulder
-    R8_I  = RI_8.T
-    RI_9  = rot_y(x[idx['theta_9']]) @ RI_8                                                    # r_front_knee
-    R9_I  = RI_9.T
-    RI_10 = rot_y(x[idx['theta_10']]) @ RI_3                                                   # l_hip
+    RI_0 = rot_z(x[idx['psi_0']]) @ rot_x(x[idx['phi_0']]) @ rot_y(x[idx['theta_0']])  # head
+    R0_I = RI_0.T
+    RI_1 = rot_z(x[idx['psi_1']]) @ rot_x(x[idx['phi_1']]) @ rot_y(x[idx['theta_1']]) @ RI_0  # neck
+    R1_I = RI_1.T
+    RI_2 = rot_y(x[idx['theta_2']]) @ RI_1  # front torso
+    R2_I = RI_2.T
+    RI_3 = rot_z(x[idx['psi_3']]) @ rot_x(x[idx['phi_3']]) @ rot_y(x[idx['theta_3']]) @ RI_2  # back torso
+    R3_I = RI_3.T
+    RI_4 = rot_z(x[idx['psi_4']]) @ rot_y(x[idx['theta_4']]) @ RI_3  # tail base
+    R4_I = RI_4.T
+    RI_5 = rot_z(x[idx['psi_5']]) @ rot_y(x[idx['theta_5']]) @ RI_4  # tail mid
+    R5_I = RI_5.T
+    RI_6 = rot_y(x[idx['theta_6']]) @ RI_2  # l_shoulder
+    R6_I = RI_6.T
+    RI_7 = rot_y(x[idx['theta_7']]) @ RI_6  # l_front_knee
+    R7_I = RI_7.T
+    RI_8 = rot_y(x[idx['theta_8']]) @ RI_2  # r_shoulder
+    R8_I = RI_8.T
+    RI_9 = rot_y(x[idx['theta_9']]) @ RI_8  # r_front_knee
+    R9_I = RI_9.T
+    RI_10 = rot_y(x[idx['theta_10']]) @ RI_3  # l_hip
     R10_I = RI_10.T
-    RI_11 = rot_y(x[idx['theta_11']]) @ RI_10                                                  # l_back_knee
+    RI_11 = rot_y(x[idx['theta_11']]) @ RI_10  # l_back_knee
     R11_I = RI_11.T
-    RI_12 = rot_y(x[idx['theta_12']]) @ RI_3                                                   # r_hip
+    RI_12 = rot_y(x[idx['theta_12']]) @ RI_3  # r_hip
     R12_I = RI_12.T
-    RI_13 = rot_y(x[idx['theta_13']]) @ RI_12                                                  # r_back_knee
+    RI_13 = rot_y(x[idx['theta_13']]) @ RI_12  # r_back_knee
     R13_I = RI_13.T
 
-
     # positions
-    p_head          = func([x[idx['x_0']], x[idx['y_0']], x[idx['z_0']]])
+    p_head = func([x[idx['x_0']], x[idx['y_0']], x[idx['z_0']]])
 
-    p_l_eye         = p_head         + R0_I  @ func([0, 0.03, 0])
-    p_r_eye         = p_head         + R0_I  @ func([0, -0.03, 0])
-    p_nose          = p_head         + R0_I  @ func([0.055, 0, -0.055])
+    p_l_eye = p_head + R0_I @ func([0, 0.03, 0])
+    p_r_eye = p_head + R0_I @ func([0, -0.03, 0])
+    p_nose = p_head + R0_I @ func([0.055, 0, -0.055])
 
-    p_neck_base     = p_head         + R1_I  @ func([-0.28, 0, 0])
-    p_spine         = p_neck_base    + R2_I  @ func([-0.37, 0, 0])
+    p_neck_base = p_head + R1_I @ func([-0.28, 0, 0])
+    p_spine = p_neck_base + R2_I @ func([-0.37, 0, 0])
 
-    p_tail_base     = p_spine        + R3_I  @ func([-0.37, 0, 0])
-    p_tail_mid      = p_tail_base    + R4_I  @ func([-0.28, 0, 0])
-    p_tail_tip      = p_tail_mid     + R5_I  @ func([-0.36, 0, 0])
+    p_tail_base = p_spine + R3_I @ func([-0.37, 0, 0])
+    p_tail_mid = p_tail_base + R4_I @ func([-0.28, 0, 0])
+    p_tail_tip = p_tail_mid + R5_I @ func([-0.36, 0, 0])
 
-    p_l_shoulder    = p_neck_base    + R2_I  @ func([-0.04, 0.08, -0.10])
-    p_l_front_knee  = p_l_shoulder   + R6_I  @ func([0, 0, -0.24])
-    p_l_front_ankle = p_l_front_knee + R7_I  @ func([0, 0, -0.28])
+    p_l_shoulder = p_neck_base + R2_I @ func([-0.04, 0.08, -0.10])
+    p_l_front_knee = p_l_shoulder + R6_I @ func([0, 0, -0.24])
+    p_l_front_ankle = p_l_front_knee + R7_I @ func([0, 0, -0.28])
 
-    p_r_shoulder    = p_neck_base    + R2_I  @ func([-0.04, -0.08, -0.10])
-    p_r_front_knee  = p_r_shoulder   + R8_I  @ func([0, 0, -0.24])
-    p_r_front_ankle = p_r_front_knee + R9_I  @ func([0, 0, -0.28])
+    p_r_shoulder = p_neck_base + R2_I @ func([-0.04, -0.08, -0.10])
+    p_r_front_knee = p_r_shoulder + R8_I @ func([0, 0, -0.24])
+    p_r_front_ankle = p_r_front_knee + R9_I @ func([0, 0, -0.28])
 
-    p_l_hip         = p_tail_base    + R3_I  @ func([0.12, 0.08, -0.06])
-    p_l_back_knee   = p_l_hip        + R10_I @ func([0, 0, -0.32])
-    p_l_back_ankle  = p_l_back_knee  + R11_I @ func([0, 0, -0.25])
+    p_l_hip = p_tail_base + R3_I @ func([0.12, 0.08, -0.06])
+    p_l_back_knee = p_l_hip + R10_I @ func([0, 0, -0.32])
+    p_l_back_ankle = p_l_back_knee + R11_I @ func([0, 0, -0.25])
 
-    p_r_hip         = p_tail_base    + R3_I  @ func([0.12, -0.08, -0.06])
-    p_r_back_knee   = p_r_hip        + R12_I @ func([0, 0, -0.32])
-    p_r_back_ankle  = p_r_back_knee  + R13_I @ func([0, 0, -0.25])
+    p_r_hip = p_tail_base + R3_I @ func([0.12, -0.08, -0.06])
+    p_r_back_knee = p_r_hip + R12_I @ func([0, 0, -0.32])
+    p_r_back_ankle = p_r_back_knee + R13_I @ func([0, 0, -0.25])
 
-#     p_lure = func([x[idx['x_l']], x[idx['y_l']], x[idx['z_l']]])
-
-    return func([p_nose.T, p_r_eye.T, p_l_eye.T,
-                 p_neck_base.T, p_spine.T,
-                 p_tail_base.T, p_tail_mid.T, p_tail_tip.T,
-                 p_r_shoulder.T, p_r_front_knee.T, p_r_front_ankle.T,
-                 p_l_shoulder.T, p_l_front_knee.T, p_l_front_ankle.T,
-                 p_r_hip.T, p_r_back_knee.T, p_r_back_ankle.T,
-                 p_l_hip.T, p_l_back_knee.T, p_l_back_ankle.T,
-#                  p_lure.T
-                ])
+    return func([
+        p_nose.T,
+        p_r_eye.T,
+        p_l_eye.T,
+        p_neck_base.T,
+        p_spine.T,
+        p_tail_base.T,
+        p_tail_mid.T,
+        p_tail_tip.T,
+        p_r_shoulder.T,
+        p_r_front_knee.T,
+        p_r_front_ankle.T,
+        p_l_shoulder.T,
+        p_l_front_knee.T,
+        p_l_front_ankle.T,
+        p_r_hip.T,
+        p_r_back_knee.T,
+        p_r_back_ankle.T,
+        p_l_hip.T,
+        p_l_back_knee.T,
+        p_l_back_ankle.T,
+    ])
 
 
 def redescending_loss(err, a, b, c):
     # outlier rejecting cost function
     def func_step(start, x):
-        return 1/(1+np.e**(-1*(x - start)))
+        return 1 / (1 + np.e**(-1 * (x - start)))
 
     def func_piece(start, end, x):
         return func_step(start, x) - func_step(end, x)
 
     e = abs(err)
     cost = 0.0
-    cost += (1 - func_step(a, e))/2*e**2
-    cost += func_piece(a, b, e)*(a*e - (a**2)/2)
-    cost += func_piece(b, c, e)*(a*b - (a**2)/2 + (a*(c-b)/2)*(1-((c-e)/(c-b))**2))
-    cost += func_step(c, e)*(a*b - (a**2)/2 + (a*(c-b)/2))
+    cost += (1 - func_step(a, e)) / 2 * e**2
+    cost += func_piece(a, b, e) * (a * e - (a**2) / 2)
+    cost += func_piece(b, c, e) * (a * b - (a**2) / 2 + (a * (c - b) / 2) * (1 - ((c - e) / (c - b))**2))
+    cost += func_step(c, e) * (a * b - (a**2) / 2 + (a * (c - b) / 2))
     return cost
+
 
 def redescending_smooth_loss(r, c, arctan_func):
-    cost = (0.25*c**2 * (arctan_func(r/c)**2 + ((c*r)**2)/(c**4+r**4)))
+    cost = (0.25 * c**2 * (arctan_func(r / c)**2 + ((c * r)**2) / (c**4 + r**4)))
     return cost
+
 
 def cauchy_loss(r, c, log_func):
-    cost = c**2 * (log_func(1 + (r/c)**2))
+    cost = c**2 * (log_func(1 + (r / c)**2))
     return cost
 
+
 def fair_loss(r, c, log_func):
-    cost = (c**2 * ((abs(r)/c) - log_func(1 + (abs(r)/c))))
+    cost = (c**2 * ((abs(r) / c) - log_func(1 + (abs(r) / c))))
     return cost
+
 
 def global_positions(R_arr, t_arr):
     "Returns a vector of camera position vectors in the world frame"
@@ -158,7 +294,7 @@ def global_positions(R_arr, t_arr):
     t_arr = np.array(t_arr).reshape((-1, 3, 1))
 
     positions = []
-    assert R_arr.shape[0]==t_arr.shape[0], 'Number of cams in R_arr do not match t_arr'
+    assert R_arr.shape[0] == t_arr.shape[0], 'Number of cams in R_arr do not match t_arr'
     for r, t in zip(R_arr, t_arr):
         pos = -r.T @ t
         positions.append(pos)
@@ -166,7 +302,7 @@ def global_positions(R_arr, t_arr):
     return np.array(positions, dtype=np.float32)
 
 
-def rotation_matrix_from_vectors(u,v):
+def rotation_matrix_from_vectors(u, v):
     """ Find the rotation matrix that aligns u to v
     :param u: A 3D "source" vector
     :param v: A 3D "destination" vector
@@ -178,8 +314,8 @@ def rotation_matrix_from_vectors(u,v):
     # Let M be the associated matrix.
     # We have finally: (V,W,V^W) = M.(U,W,U^W)
 
-    U = (u/np.linalg.norm(u)).reshape(3)
-    V = (v/np.linalg.norm(v)).reshape(3)
+    U = (u / np.linalg.norm(u)).reshape(3)
+    V = (v / np.linalg.norm(v)).reshape(3)
 
     W = np.cross(U, V)
     A = np.array([U, W, np.cross(U, W)]).T
@@ -196,9 +332,7 @@ def rot_x(x):
         c = np.cos(x)
         s = np.sin(x)
         func = np.array
-    return func([[1, 0, 0],
-                 [0, c, s],
-                 [0, -s, c]])
+    return func([[1, 0, 0], [0, c, s], [0, -s, c]])
 
 
 def rot_y(y):
@@ -210,9 +344,7 @@ def rot_y(y):
         c = np.cos(y)
         s = np.sin(y)
         func = np.array
-    return func([[c, 0, -s],
-                 [0, 1, 0],
-                 [s, 0, c]])
+    return func([[c, 0, -s], [0, 1, 0], [s, 0, c]])
 
 
 def rot_z(z):
@@ -224,14 +356,11 @@ def rot_z(z):
         c = np.cos(z)
         s = np.sin(z)
         func = np.array
-    return func([[c, s, 0],
-                 [-s, c, 0],
-                 [0, 0, 1]])
+    return func([[c, s, 0], [-s, c, 0], [0, 0, 1]])
 
 
 # https://stackoverflow.com/questions/14906764/how-to-redirect-stdout-to-both-file-and-console-with-scripting
 class Logger:
-
     def __init__(self, out_fpath):
         self.terminal = sys.stdout
         self.logfile = open(out_fpath, 'w', buffering=1)
