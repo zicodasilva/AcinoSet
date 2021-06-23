@@ -349,10 +349,10 @@ def run(root_dir: str,
         243,  # l_back_knee
         334,  # r_hip
         149,  # r_back_knee
-        250,  # l_front_ankle
-        250,  # r_front_ankle
-        250,  # l_back_ankle
-        250  # r_back_ankle
+        242,  # l_front_ankle
+        200,  # r_front_ankle
+        205,  # l_back_ankle
+        216  # r_back_ankle
     ]
     Q = np.array(Q, dtype=float)**2
 
