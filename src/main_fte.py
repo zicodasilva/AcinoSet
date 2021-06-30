@@ -156,9 +156,9 @@ def run(root_dir: str,
     t0 = time()
 
     if out_dir_prefix:
-        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw" if single_view == 0 else "fte_pw_1")
+        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw" if single_view == 0 else f"fte_pw_{single_view}")
     else:
-        out_dir = os.path.join(root_dir, data_path, "fte_pw" if single_view == 0 else "fte_pw_1")
+        out_dir = os.path.join(root_dir, data_path, "fte_pw" if single_view == 0 else f"fte_pw_{single_view}")
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
@@ -775,7 +775,7 @@ if __name__ == "__main__":
     working_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
     video_data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = video_data["test_dirs"]
-    dir_prefix = "/data/zico/CheetahResults/test_initial_estimate"
+    dir_prefix = "/data/zico/CheetahResults/paws_included"
     manually_selected_frames = {
         "2017_08_29/top/phantom/run1_1": (20, 170),
         "2019_03_03/menya/run": (20, 150),
