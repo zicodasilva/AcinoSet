@@ -1,7 +1,7 @@
 import os
 import platform
 import json
-from typing import Union
+from typing import Union, Tuple
 import numpy as np
 from pyomo.core.expr.current import log as pyomo_log
 import sympy as sp
@@ -15,9 +15,47 @@ from pyomo.opt import SolverFactory
 from lib import misc, utils, app
 from lib.calib import triangulate_points_fisheye, project_points_fisheye
 from py_utils import data_ops, log
+from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import Pipeline
+from sklearn import preprocessing
 
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
+
+
+def train_motion_model(window_size: int) -> Tuple[Pipeline, np.ndarray, np.ndarray]:
+    logger.info(f"Train motion prediction model")
+    model_dir = "/Users/zico/msc/data/CheetahRuns"
+    p_idx = misc.get_pose_params()
+    pose_states = p_idx.keys()
+    num_vars = len(pose_states)
+    df = pd.read_hdf(os.path.join(model_dir, "dataset_v2.h5"))
+    df_input = data_ops.series_to_supervised(df, window_size)
+    # Modify the dataframe to discard the window size at the start of separate trajectory.
+    del_indices = [i for i in range(window_size)]
+    df_input.drop(index=del_indices, inplace=True)
+    segment_indices = np.where(df_input.index.values == window_size)[0]
+
+    test_idx = segment_indices[-10]
+
+    pipeline = Pipeline(steps=[("normalize", preprocessing.MinMaxScaler()), ("model", LinearRegression())])
+
+    xy_set = df_input.to_numpy()
+    X = xy_set[:, 0:(num_vars * window_size)]
+    y = xy_set[:, (num_vars * window_size):]
+    X_train = X[:test_idx]
+    y_train = y[:test_idx]
+    X_test = X[test_idx:]
+    y_test = y[test_idx:]
+    logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
+    logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
+    pipeline.fit(X_train, y_train)
+    y_pred = pipeline.predict(X_test)
+    residuals = y_test - y_pred
+    means = np.mean(residuals, axis=0)
+    vars = np.var(residuals, axis=0)
+
+    return pipeline, means, vars
 
 
 def measurements_to_df(m: pyo.ConcreteModel):
@@ -410,6 +448,11 @@ def run(root_dir: str,
         end_frame = min_num_frames
         N = end_frame - start_frame
 
+    # Train motion model and make predictions with a predefined window size.
+    window_size = 2
+    num_vars = len(idx.keys())
+    pipeline, pred_mean, pred_var = train_motion_model(window_size)
+
     logger.info("Prepare data - End")
 
     # save parameters
@@ -440,6 +483,7 @@ def run(root_dir: str,
     m.D3 = pyo.RangeSet(3)
     # Number of pairwise terms to include + the base measurement.
     m.W = pyo.RangeSet(1)
+    m.NW = pyo.RangeSet(N - window_size)
 
     index_dict = misc.get_dlc_marker_indices()
     pair_dict = misc.get_pairwise_graph()
@@ -462,6 +506,7 @@ def run(root_dir: str,
 
     m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
+    m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1])
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, c, l, d2, w):
@@ -489,8 +534,10 @@ def run(root_dir: str,
     m.dx = pyo.Var(m.N, m.P)  #velocity
     m.ddx = pyo.Var(m.N, m.P)  #acceleration
     m.poses = pyo.Var(m.N, m.L, m.D3)
+    m.x_prediction = pyo.Var(m.NW, m.P)
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
+    m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
@@ -523,6 +570,9 @@ def run(root_dir: str,
                 m.x[n, p].value = init_x[-1, p - 1]
                 m.dx[n, p].value = init_dx[-1, p - 1]
                 m.ddx[n, p].value = init_ddx[-1, p - 1]
+            # Initialise motion prediction to the initial state.
+            if n > window_size:
+                m.x_prediction[n - window_size, p].value = pyo.value(m.x[n, p])
         #init pose
         var_list = [m.x[n, p].value for p in range(1, P + 1)]
         for l in m.L:
@@ -559,6 +609,15 @@ def run(root_dir: str,
 
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
 
+    def pose_prediction(m, n, p):
+        x_input = get_vals_v(m.x, [m.N, m.P])
+        df = data_ops.series_to_supervised(x_input, window_size)
+        X = df.to_numpy()[:, 0:(num_vars * window_size)]
+        y_pred = pipeline.predict(X)
+        return m.x_prediction[n, p] == y_pred[n - 1, p - 1]
+
+    m.pose_prediction = pyo.Constraint(m.NW, m.P, rule=pose_prediction)
+
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
         #project
@@ -568,6 +627,14 @@ def run(root_dir: str,
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
 
     m.measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule=measurement_constraints)
+
+    def motion_constraints(m, n, p):
+        if n > window_size:
+            return m.x_prediction[n - window_size, p] - m.x[n, p] - m.slack_motion[n, p] == 0.0
+        else:
+            return pyo.Constraint.Skip
+
+    m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     # Head
@@ -620,9 +687,11 @@ def run(root_dir: str,
 
     m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_13"])], np.pi))
     m.l_front_ankle_theta_14 = pyo.Constraint(m.N,
-                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_14"])], np.pi / 2))
+                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_14"])],
+                                                                 (2 / 3) * np.pi))
     m.r_front_ankle_theta_15 = pyo.Constraint(m.N,
-                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_15"])], np.pi / 2))
+                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_15"])],
+                                                                 (2 / 3) * np.pi))
     m.l_back_ankle_theta_16 = pyo.Constraint(m.N,
                                              rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_16"])], 0))
     m.r_back_ankle_theta_17 = pyo.Constraint(m.N,
@@ -633,11 +702,14 @@ def run(root_dir: str,
     # ======= OBJECTIVE FUNCTION =======
     def obj(m):
         slack_model_err = 0.0
+        slack_motion_err = 0.0
         slack_meas_err = 0.0
         for n in m.N:
             #Model Error
             for p in m.P:
                 slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
+                slack_motion_err += m.motion_err_weight[p] * m.slack_motion[n, p]**2
+                # slack_motion_err += (1 / 0.1 * m.slack_motion[n, p])**2
             #Measurement Error
             for l in m.L:
                 for c in m.C:
@@ -645,7 +717,7 @@ def run(root_dir: str,
                         for w in m.W:
                             slack_meas_err += loss_function(
                                 m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
-        return 1e-3 * (slack_meas_err + slack_model_err)
+        return 1e-3 * (slack_meas_err + slack_model_err + slack_motion_err)
 
     m.obj = pyo.Objective(rule=obj)
 
