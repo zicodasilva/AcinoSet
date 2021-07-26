@@ -17,6 +17,7 @@ from lib.calib import triangulate_points_fisheye, project_points_fisheye
 from py_utils import data_ops, log
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA
 from sklearn import preprocessing
 
 # Create a module logger with the name of this file.
@@ -36,9 +37,10 @@ def train_motion_model(window_size: int) -> Tuple[Pipeline, np.ndarray, np.ndarr
     df_input.drop(index=del_indices, inplace=True)
     segment_indices = np.where(df_input.index.values == window_size)[0]
 
-    test_idx = segment_indices[-10]
+    test_idx = segment_indices[-7]
 
-    pipeline = Pipeline(steps=[("normalize", preprocessing.MinMaxScaler()), ("model", LinearRegression())])
+    pipeline = Pipeline(steps=[("normalize", preprocessing.MinMaxScaler()), ("pca", PCA(
+        n_components=10 * window_size)), ("model", LinearRegression())])
 
     xy_set = df_input.to_numpy()
     X = xy_set[:, 0:(num_vars * window_size)]
@@ -452,7 +454,6 @@ def run(root_dir: str,
     window_size = 2
     num_vars = len(idx.keys())
     pipeline, pred_mean, pred_var = train_motion_model(window_size)
-
     logger.info("Prepare data - End")
 
     # save parameters
@@ -849,16 +850,47 @@ if __name__ == "__main__":
     tests = video_data["test_dirs"]
     dir_prefix = "/data/zico/CheetahResults/paws_included"
     manually_selected_frames = {
-        "2017_08_29/top/phantom/run1_1": (20, 170),
-        "2019_03_03/menya/run": (20, 150),
-        "2019_03_07/menya/run": (70, 160),
-        "2019_03_09/lily/run": (50, 200),
-        "2019_03_05/lily/flick": (100, 200),
-        "2017_08_29/top/zorro/flick1_2": (20, 140),
-        "2017_09_02/bottom/phantom/flick2_1": (5, 100),
-        "2017_12_12/bottom/big_girl/flick2": (30, 100),
-        "2019_03_03/phantom/flick": (270, 460),
+        '2019_03_03/phantom/run': (73, 272),
+        '2017_12_12/top/cetane/run1_1': (100, 241),
+        '2019_03_05/jules/run': (58, 176),
+        '2019_03_09/lily/run': (80, 180),
+        '2017_09_03/top/zorro/run1_2': (20, 120),
+        '2017_08_29/top/phantom/run1_1': (20, 170),
+        '2017_12_21/top/lily/run1': (7, 106),
+        '2019_03_03/menya/run': (20, 130),
+        '2017_12_10/top/phantom/run1': (30, 130),
+        '2017_09_03/bottom/zorro/run2_1': (126, 325),
+        '2019_02_27/ebony/run': (20, 200),
+        '2017_12_09/bottom/phantom/run2': (18, 117),
+        '2017_09_03/bottom/zorro/run2_3': (1, 200),
+        '2017_08_29/top/jules/run1_1': (10, 110),
+        '2017_09_02/top/jules/run1': (10, 110),
+        '2019_03_07/menya/run': (60, 160),
+        '2017_09_02/top/phantom/run1_2': (20, 160),
+        '2019_03_05/lily/run': (150, 250),
+        '2017_12_12/top/cetane/run1_2': (3, 202),
+        '2019_03_07/phantom/run': (100, 200),
+        '2019_02_27/romeo/run': (12, 190),
+        '2017_08_29/top/jules/run1_2': (30, 130),
+        '2017_12_16/top/cetane/run1': (110, 210),
+        '2017_09_02/top/phantom/run1_1': (33, 150),
+        '2017_09_02/top/phantom/run1_3': (35, 135),
+        '2017_09_03/top/zorro/run1_1': (4, 203),
+        '2019_02_27/kiara/run': (10, 110),
+        '2017_09_02/bottom/jules/run2': (35, 171),
+        '2017_09_03/bottom/zorro/run2_2': (32, 141)
     }
+    # manually_selected_frames = {
+    #     "2017_08_29/top/phantom/run1_1": (20, 170),
+    #     "2019_03_03/menya/run": (20, 150),
+    #     "2019_03_07/menya/run": (70, 160),
+    #     "2019_03_09/lily/run": (50, 200),
+    #     "2019_03_05/lily/flick": (100, 200),
+    #     "2017_08_29/top/zorro/flick1_2": (20, 140),
+    #     "2017_09_02/bottom/phantom/flick2_1": (5, 100),
+    #     "2017_12_12/bottom/big_girl/flick2": (30, 100),
+    #     "2019_03_03/phantom/flick": (270, 460),
+    # }
     bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1", "2017_12_17/top/zorro/flick1")
     if platform.python_implementation() == "PyPy":
         time0 = time()
@@ -877,11 +909,11 @@ if __name__ == "__main__":
         optimiser.options["linear_solver"] = "ma86"
         optimiser.options["OF_ma86_scaling"] = "none"
         optimiser.options["OF_warm_start_init_point"] = "yes"
-
+        valid_vids = set(manually_selected_frames.keys())
         for test_vid in tqdm(tests):
             current_dir = test_vid.split("/cheetah_videos/")[1]
             # Filter parameters based on past experience.
-            if current_dir in bad_videos:
+            if current_dir not in valid_vids:
                 # Skip these videos because of erroneous input data.
                 continue
             start = 1
