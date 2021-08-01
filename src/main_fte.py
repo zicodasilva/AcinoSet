@@ -18,46 +18,43 @@ from py_utils import data_ops, log
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
 
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
 
 
-def train_motion_model(window_size: int) -> Tuple[Pipeline, np.ndarray, np.ndarray]:
-    logger.info(f"Train motion prediction model")
-    model_dir = "/Users/zico/msc/data/CheetahRuns"
+def train_motion_model(window_size: int) -> Tuple[Pipeline, np.ndarray]:
+    logger.info("Train motion prediction model")
+    model_dir = "/Users/zico/msc/data/CheetahRuns/v2/model"
     p_idx = misc.get_pose_params()
     pose_states = p_idx.keys()
     num_vars = len(pose_states)
-    df = pd.read_hdf(os.path.join(model_dir, "dataset_v2.h5"))
+    df = pd.read_hdf(os.path.join(model_dir, "dataset.h5"))
     df_input = data_ops.series_to_supervised(df, window_size)
     # Modify the dataframe to discard the window size at the start of separate trajectory.
     del_indices = [i for i in range(window_size)]
     df_input.drop(index=del_indices, inplace=True)
-    segment_indices = np.where(df_input.index.values == window_size)[0]
 
-    test_idx = segment_indices[-7]
-
-    pipeline = Pipeline(steps=[("normalize", preprocessing.MinMaxScaler()), ("pca", PCA(
-        n_components=10 * window_size)), ("model", LinearRegression())])
-
+    # pipeline = Pipeline(steps=[("normalize",
+    #                             preprocessing.MinMaxScaler()), ("pca",
+    #                                                             PCA(n_components=n_comps)), ("model",
+    #                                                                                          LinearRegression())])
+    pipeline = Pipeline(steps=[("model", LinearRegression())])
     xy_set = df_input.to_numpy()
     X = xy_set[:, 0:(num_vars * window_size)]
     y = xy_set[:, (num_vars * window_size):]
-    X_train = X[:test_idx]
-    y_train = y[:test_idx]
-    X_test = X[test_idx:]
-    y_test = y[test_idx:]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
     logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
     logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
     pipeline.fit(X_train, y_train)
+
     y_pred = pipeline.predict(X_test)
     residuals = y_test - y_pred
-    means = np.mean(residuals, axis=0)
-    vars = np.var(residuals, axis=0)
+    variance = np.var(residuals, axis=0)
 
-    return pipeline, means, vars
+    return pipeline, np.asarray(variance)
 
 
 def measurements_to_df(m: pyo.ConcreteModel):
@@ -98,6 +95,14 @@ def get_vals_v(var: Union[pyo.Var, pyo.Param], idxs: list) -> np.ndarray:
 
 def pyo_i(i: int) -> int:
     return i + 1
+
+
+def plot_trajectory(fte_file: str, scene_file: str, centered=False):
+    app.plot_cheetah_reconstruction(fte_file,
+                                    scene_fname=scene_file,
+                                    reprojections=False,
+                                    dark_mode=True,
+                                    centered=centered)
 
 
 def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_reprojections=False, centered=False):
@@ -453,7 +458,9 @@ def run(root_dir: str,
     # Train motion model and make predictions with a predefined window size.
     window_size = 2
     num_vars = len(idx.keys())
-    pipeline, pred_mean, pred_var = train_motion_model(window_size)
+    pipeline = None
+    if single_view > 0:
+        pipeline, pred_var = train_motion_model(window_size)
     logger.info("Prepare data - End")
 
     # save parameters
@@ -507,7 +514,8 @@ def run(root_dir: str,
 
     m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
-    m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1])
+    if single_view > 0:
+        m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1])
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, c, l, d2, w):
@@ -535,10 +543,13 @@ def run(root_dir: str,
     m.dx = pyo.Var(m.N, m.P)  #velocity
     m.ddx = pyo.Var(m.N, m.P)  #acceleration
     m.poses = pyo.Var(m.N, m.L, m.D3)
-    m.x_prediction = pyo.Var(m.NW, m.P)
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
-    m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
+    if single_view > 0:
+        m.x_prediction = pyo.Var(m.NW, m.P)
+        m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
+    else:
+        m.shutter_delay = pyo.Var(m.C, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
@@ -572,7 +583,7 @@ def run(root_dir: str,
                 m.dx[n, p].value = init_dx[-1, p - 1]
                 m.ddx[n, p].value = init_ddx[-1, p - 1]
             # Initialise motion prediction to the initial state.
-            if n > window_size:
+            if single_view > 0 and n > window_size:
                 m.x_prediction[n - window_size, p].value = pyo.value(m.x[n, p])
         #init pose
         var_list = [m.x[n, p].value for p in range(1, P + 1)]
@@ -610,32 +621,46 @@ def run(root_dir: str,
 
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
 
-    def pose_prediction(m, n, p):
+    if single_view > 0 and pipeline is not None:
         x_input = get_vals_v(m.x, [m.N, m.P])
         df = data_ops.series_to_supervised(x_input, window_size)
-        X = df.to_numpy()[:, 0:(num_vars * window_size)]
-        y_pred = pipeline.predict(X)
-        return m.x_prediction[n, p] == y_pred[n - 1, p - 1]
+        y_pred = pipeline.predict(df.to_numpy()[:, 0:(num_vars * window_size)])
 
-    m.pose_prediction = pyo.Constraint(m.NW, m.P, rule=pose_prediction)
+        def pose_prediction(m, n, p):
+            return m.x_prediction[n, p] == y_pred[n - 1, p - 1]
+
+        m.pose_prediction = pyo.Constraint(m.NW, m.P, rule=pose_prediction)
+
+        def motion_constraints(m, n, p):
+            if n > window_size:
+                return m.x_prediction[n - window_size, p] - m.x[n, p] - m.slack_motion[n, p] == 0.0
+            else:
+                return pyo.Constraint.Skip
+
+        m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
+    else:
+        # def shutter_base_constraint(m):
+        #     return m.shutter_delay[1] == 0.0
+
+        def shutter_delay_constraint(m, c):
+            return abs(m.shutter_delay[c]) <= m.Ts if c > 1 else m.shutter_delay[c] == 0.0
+
+        # m.shutter_base_constraint = pyo.Constraint(rule=shutter_base_constraint)
+        m.shutter_delay_constraint = pyo.Constraint(m.C, rule=shutter_delay_constraint)
 
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
         #project
         cam_idx = single_view - 1 if single_view > 0 else c - 1
+        tau = 0.0 if single_view > 0 else m.shutter_delay[c]
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
-        x, y, z = m.poses[n, l, 1], m.poses[n, l, 2], m.poses[n, l, 3]
+        x = m.poses[n, l, pyo_i(idx["x_0"])] + m.dx[n, pyo_i(idx["x_0"])] * tau
+        y = m.poses[n, l, pyo_i(idx["y_0"])] + m.dx[n, pyo_i(idx["y_0"])] * tau
+        z = m.poses[n, l, pyo_i(idx["z_0"])] + m.dx[n, pyo_i(idx["z_0"])] * tau
+
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
 
     m.measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule=measurement_constraints)
-
-    def motion_constraints(m, n, p):
-        if n > window_size:
-            return m.x_prediction[n - window_size, p] - m.x[n, p] - m.slack_motion[n, p] == 0.0
-        else:
-            return pyo.Constraint.Skip
-
-    m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     # Head
@@ -709,8 +734,9 @@ def run(root_dir: str,
             #Model Error
             for p in m.P:
                 slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
-                slack_motion_err += m.motion_err_weight[p] * m.slack_motion[n, p]**2
-                # slack_motion_err += (1 / 0.1 * m.slack_motion[n, p])**2
+                if single_view > 0:
+                    slack_motion_err += m.motion_err_weight[p] * m.slack_motion[n, p]**2
+                    # slack_motion_err += (1 / 0.1 * m.slack_motion[n, p])**2
             #Measurement Error
             for l in m.L:
                 for c in m.C:
@@ -752,6 +778,8 @@ def run(root_dir: str,
     app.stop_logging()
 
     logger.info("Generate outputs...")
+    if single_view == 0:
+        print("shutter delay:", [m.shutter_delay[c].value for c in m.C])
 
     # ===== SAVE FTE RESULTS =====
     x_optimised = get_vals_v(m.x, [m.N, m.P])
@@ -817,7 +845,6 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
     opt.options["OF_accept_every_trial_step"] = "yes"
     opt.options["linear_solver"] = "ma86"
     opt.options["OF_ma86_scaling"] = "none"
-    opt.options["OF_warm_start_init_point"] = "yes"
 
     if platform.python_implementation() == "PyPy":
         for test_dir in tqdm(test_videos):
@@ -848,37 +875,37 @@ if __name__ == "__main__":
     working_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
     video_data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = video_data["test_dirs"]
-    dir_prefix = "/data/zico/CheetahResults/paws_included"
+    dir_prefix = "/data/zico/CheetahResults/paws-included"
     manually_selected_frames = {
-        '2019_03_03/phantom/run': (73, 272),
-        '2017_12_12/top/cetane/run1_1': (100, 241),
-        '2019_03_05/jules/run': (58, 176),
-        '2019_03_09/lily/run': (80, 180),
-        '2017_09_03/top/zorro/run1_2': (20, 120),
-        '2017_08_29/top/phantom/run1_1': (20, 170),
-        '2017_12_21/top/lily/run1': (7, 106),
-        '2019_03_03/menya/run': (20, 130),
-        '2017_12_10/top/phantom/run1': (30, 130),
-        '2017_09_03/bottom/zorro/run2_1': (126, 325),
-        '2019_02_27/ebony/run': (20, 200),
-        '2017_12_09/bottom/phantom/run2': (18, 117),
-        '2017_09_03/bottom/zorro/run2_3': (1, 200),
-        '2017_08_29/top/jules/run1_1': (10, 110),
-        '2017_09_02/top/jules/run1': (10, 110),
-        '2019_03_07/menya/run': (60, 160),
-        '2017_09_02/top/phantom/run1_2': (20, 160),
-        '2019_03_05/lily/run': (150, 250),
-        '2017_12_12/top/cetane/run1_2': (3, 202),
-        '2019_03_07/phantom/run': (100, 200),
-        '2019_02_27/romeo/run': (12, 190),
-        '2017_08_29/top/jules/run1_2': (30, 130),
-        '2017_12_16/top/cetane/run1': (110, 210),
-        '2017_09_02/top/phantom/run1_1': (33, 150),
-        '2017_09_02/top/phantom/run1_3': (35, 135),
-        '2017_09_03/top/zorro/run1_1': (4, 203),
-        '2019_02_27/kiara/run': (10, 110),
-        '2017_09_02/bottom/jules/run2': (35, 171),
-        '2017_09_03/bottom/zorro/run2_2': (32, 141)
+        "2019_03_03/phantom/run": (73, 272),
+        "2017_12_12/top/cetane/run1_1": (100, 241),
+        "2019_03_05/jules/run": (58, 176),
+        "2019_03_09/lily/run": (80, 180),
+        "2017_09_03/top/zorro/run1_2": (20, 120),
+        "2017_08_29/top/phantom/run1_1": (20, 170),
+        "2017_12_21/top/lily/run1": (7, 106),
+        "2019_03_03/menya/run": (20, 130),
+        "2017_12_10/top/phantom/run1": (30, 130),
+        "2017_09_03/bottom/zorro/run2_1": (126, 325),
+        "2019_02_27/ebony/run": (20, 200),
+        "2017_12_09/bottom/phantom/run2": (18, 117),
+        "2017_09_03/bottom/zorro/run2_3": (1, 200),
+        "2017_08_29/top/jules/run1_1": (10, 110),
+        "2017_09_02/top/jules/run1": (10, 110),
+        "2019_03_07/menya/run": (60, 160),
+        "2017_09_02/top/phantom/run1_2": (20, 160),
+        "2019_03_05/lily/run": (150, 250),
+        "2017_12_12/top/cetane/run1_2": (3, 202),
+        "2019_03_07/phantom/run": (100, 200),
+        "2019_02_27/romeo/run": (12, 190),
+        "2017_08_29/top/jules/run1_2": (30, 130),
+        "2017_12_16/top/cetane/run1": (110, 210),
+        "2017_09_02/top/phantom/run1_1": (33, 150),
+        "2017_09_02/top/phantom/run1_3": (35, 135),
+        "2017_09_03/top/zorro/run1_1": (4, 203),
+        "2019_02_27/kiara/run": (10, 110),
+        "2017_09_02/bottom/jules/run2": (35, 171),
+        "2017_09_03/bottom/zorro/run2_2": (32, 141)
     }
     # manually_selected_frames = {
     #     "2017_08_29/top/phantom/run1_1": (20, 170),
@@ -908,7 +935,6 @@ if __name__ == "__main__":
         optimiser.options["OF_accept_every_trial_step"] = "yes"
         optimiser.options["linear_solver"] = "ma86"
         optimiser.options["OF_ma86_scaling"] = "none"
-        optimiser.options["OF_warm_start_init_point"] = "yes"
         valid_vids = set(manually_selected_frames.keys())
         for test_vid in tqdm(tests):
             current_dir = test_vid.split("/cheetah_videos/")[1]
