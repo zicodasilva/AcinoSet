@@ -713,15 +713,15 @@ def run(root_dir: str,
 
     m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_13"])], np.pi))
     m.l_front_ankle_theta_14 = pyo.Constraint(m.N,
-                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_14"])],
-                                                                 (2 / 3) * np.pi))
+                                              rule=lambda m, n: (-np.pi / 3, m.x[n, pyo_i(idx["theta_14"])],
+                                                                 (3 / 4) * np.pi))
     m.r_front_ankle_theta_15 = pyo.Constraint(m.N,
-                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_15"])],
-                                                                 (2 / 3) * np.pi))
+                                              rule=lambda m, n: (-np.pi / 3, m.x[n, pyo_i(idx["theta_15"])],
+                                                                 (3 / 4) * np.pi))
     m.l_back_ankle_theta_16 = pyo.Constraint(m.N,
-                                             rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_16"])], 0))
+                                             rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_16"])], 0))
     m.r_back_ankle_theta_17 = pyo.Constraint(m.N,
-                                             rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_17"])], 0))
+                                             rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_17"])], 0))
 
     logger.info("Constaint initialisation...Done")
 
