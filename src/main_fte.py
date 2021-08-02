@@ -367,10 +367,10 @@ def run(root_dir: str,
         ]
     ],
                     dtype=float)
-    R_pw *= 2
-    # R_pw[0, :] = 5.0
-    # R_pw[1, :] = 10.0
-    # R_pw[2, :] = 15.0
+    # R_pw *= 2
+    R_pw[0, :] = 5.0
+    R_pw[1, :] = 10.0
+    R_pw[2, :] = 15.0
 
     Q = [  # model parameters variance
         4,
@@ -643,15 +643,8 @@ def run(root_dir: str,
 
         m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
     else:
-
-        def shutter_base_constraint(m, n):
-            return m.shutter_delay[n, 1] == 0.0
-
-        def shutter_delay_constraint(m, n, c):
-            return abs(m.shutter_delay[n, c]) <= m.Ts
-
-        m.shutter_base_constraint = pyo.Constraint(m.N, rule=shutter_base_constraint)
-        m.shutter_delay_constraint = pyo.Constraint(m.N, m.C, rule=shutter_delay_constraint)
+        m.shutter_base_constraint = pyo.Constraint(m.N, rule=lambda m, n: m.shutter_delay[n, 1] == 0.0)
+        m.shutter_delay_constraint = pyo.Constraint(m.N, m.C, rule=lambda m, n, c: (-m.Ts, m.shutter_delay[n, c], m.Ts))
 
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
@@ -769,7 +762,7 @@ def run(root_dir: str,
                             for w in m.W:
                                 slack_meas_err += loss_function(
                                     m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
-            return 1e-3 * (slack_meas_err + slack_model_err)
+            return 1e-2 * (slack_meas_err + slack_model_err)
 
         m.obj = pyo.Objective(rule=obj_multi)
 
@@ -804,7 +797,11 @@ def run(root_dir: str,
 
     logger.info("Generate outputs...")
     if single_view == 0:
-        print("shutter delay:", [[m.shutter_delay[n, c].value for n in m.N] for c in m.C])
+        # print("shutter delay:", [[m.shutter_delay[n, c].value for n in m.N] for c in m.C])
+        for c in m.C:
+            result = pd.DataFrame(pd.Series([m.shutter_delay[n, c].value for n in m.N]).describe()).transpose()
+            print(f'Camera {c}')
+            print(result)
 
     # ===== SAVE FTE RESULTS =====
     x_optimised = get_vals_v(m.x, [m.N, m.P])
