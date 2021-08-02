@@ -553,7 +553,7 @@ def run(root_dir: str,
         m.x_prediction = pyo.Var(m.NW, m.P)
         m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
     else:
-        m.shutter_delay = pyo.Var(m.C, initialize=0.0)
+        m.shutter_delay = pyo.Var(m.N, m.C, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
@@ -644,20 +644,20 @@ def run(root_dir: str,
         m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
     else:
 
-        def shutter_base_constraint(m):
-            return m.shutter_delay[1] == 0.0
+        def shutter_base_constraint(m, n):
+            return m.shutter_delay[n, 1] == 0.0
 
-        def shutter_delay_constraint(m, c):
-            return abs(m.shutter_delay[c]) <= m.Ts
+        def shutter_delay_constraint(m, n, c):
+            return abs(m.shutter_delay[n, c]) <= m.Ts
 
-        m.shutter_base_constraint = pyo.Constraint(rule=shutter_base_constraint)
-        m.shutter_delay_constraint = pyo.Constraint(m.C, rule=shutter_delay_constraint)
+        m.shutter_base_constraint = pyo.Constraint(m.N, rule=shutter_base_constraint)
+        m.shutter_delay_constraint = pyo.Constraint(m.N, m.C, rule=shutter_delay_constraint)
 
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
         #project
         cam_idx = single_view - 1 if single_view > 0 else c - 1
-        tau = 0.0 if single_view > 0 else m.shutter_delay[c]
+        tau = 0.0 if single_view > 0 else m.shutter_delay[n, c]
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
         x = m.poses[n, l, pyo_i(idx["x_0"])] + m.dx[n, pyo_i(idx["x_0"])] * tau
         y = m.poses[n, l, pyo_i(idx["y_0"])] + m.dx[n, pyo_i(idx["y_0"])] * tau
@@ -781,7 +781,7 @@ def run(root_dir: str,
         )
         # solver options
         opt.options["print_level"] = 5
-        opt.options["max_iter"] = 500
+        opt.options["max_iter"] = 400
         opt.options["max_cpu_time"] = 10000
         opt.options["Tol"] = 1e-1
         opt.options["OF_print_timing_statistics"] = "yes"
@@ -804,7 +804,7 @@ def run(root_dir: str,
 
     logger.info("Generate outputs...")
     if single_view == 0:
-        print("shutter delay:", [m.shutter_delay[c].value for c in m.C])
+        print("shutter delay:", [[m.shutter_delay[n, c].value for n in m.N] for c in m.C])
 
     # ===== SAVE FTE RESULTS =====
     x_optimised = get_vals_v(m.x, [m.N, m.P])
@@ -861,7 +861,7 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
                         )
     # solver options
     opt.options["print_level"] = 5
-    opt.options["max_iter"] = 500
+    opt.options["max_iter"] = 400
     opt.options["max_cpu_time"] = 10000
     opt.options["Tol"] = 1e-1
     opt.options["OF_print_timing_statistics"] = "yes"
@@ -897,6 +897,7 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
 
 
 if __name__ == "__main__":
+    import gc
     working_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
     video_data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
     tests = video_data["test_dirs"]
@@ -951,7 +952,7 @@ if __name__ == "__main__":
         optimiser = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
         # solver options
         optimiser.options["print_level"] = 5
-        optimiser.options["max_iter"] = 500
+        optimiser.options["max_iter"] = 400
         optimiser.options["max_cpu_time"] = 10000
         optimiser.options["Tol"] = 1e-1
         optimiser.options["OF_print_timing_statistics"] = "yes"
@@ -962,6 +963,8 @@ if __name__ == "__main__":
         optimiser.options["OF_ma86_scaling"] = "none"
         valid_vids = set(manually_selected_frames.keys())
         for test_vid in tqdm(tests):
+            # Force garbage collection so that the repeated model creation does not overflow the memory!
+            gc.collect()
             current_dir = test_vid.split("/cheetah_videos/")[1]
             # Filter parameters based on past experience.
             if current_dir not in valid_vids:
