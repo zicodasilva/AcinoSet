@@ -364,9 +364,9 @@ def run(root_dir: str,
         ]
     ],
                     dtype=float)
-    R_pw[0, :] = 5.0
-    R_pw[1, :] = 10.0
-    R_pw[2, :] = 15.0
+    # R_pw[0, :] = 5.0
+    # R_pw[1, :] = 10.0
+    # R_pw[2, :] = 15.0
 
     Q = [  # model parameters variance
         4,
