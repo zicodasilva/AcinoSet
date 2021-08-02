@@ -244,7 +244,8 @@ def get_3d_marker_coords(x):
         p_l_back_knee.T, p_l_back_ankle.T, p_l_back_paw.T
     ])
 
-def redescending_loss(err, a, b, c):
+
+def redescending_loss(err, a, b, c) -> float:
     # outlier rejecting cost function
     def func_step(start, x):
         return 1 / (1 + np.e**(-1 * (x - start)))
@@ -261,17 +262,17 @@ def redescending_loss(err, a, b, c):
     return cost
 
 
-def redescending_smooth_loss(r, c, arctan_func):
+def redescending_smooth_loss(r, c, arctan_func) -> float:
     cost = (0.25 * c**2 * (arctan_func(r / c)**2 + ((c * r)**2) / (c**4 + r**4)))
     return cost
 
 
-def cauchy_loss(r, c, log_func):
+def cauchy_loss(r, c, log_func) -> float:
     cost = c**2 * (log_func(1 + (r / c)**2))
     return cost
 
 
-def fair_loss(r, c, log_func):
+def fair_loss(r, c, log_func) -> float:
     cost = (c**2 * ((abs(r) / c) - log_func(1 + (abs(r) / c))))
     return cost
 

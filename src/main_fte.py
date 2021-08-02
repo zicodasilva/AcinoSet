@@ -156,7 +156,7 @@ def plot_cost_functions():
     plt.show(block=True)
 
 
-def loss_function(residual: float, loss="redescending"):
+def loss_function(residual: float, loss="redescending") -> float:
     if loss == "redescending":
         return misc.redescending_loss(residual, 3, 10, 20)
     elif loss == "cauchy":
@@ -165,6 +165,8 @@ def loss_function(residual: float, loss="redescending"):
         return misc.fair_loss(residual, 10, pyomo_log)
     elif loss == "lsq":
         return residual**2
+
+    return 0.0
 
 
 def create_pose_functions(data_dir: str):
@@ -190,6 +192,7 @@ def run(root_dir: str,
         end_frame: int,
         dlc_thresh: float,
         loss="redescending",
+        pairwise_included: int = 0,
         single_view: int = 0,
         init_ekf=False,
         opt=None,
@@ -292,7 +295,7 @@ def run(root_dir: str,
     ## ========= POSE FUNCTIONS ========
     pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "pose_3d_functions_with_paws.pickle"))
     idx = misc.get_pose_params()
-    sym_list = sp.symbols(list(idx.keys()))
+    sym_list = list(idx.keys())
 
     # ========= PROJECTION FUNCTIONS ========
     def pt3d_to_2d(x, y, z, K, D, R, t):
@@ -364,6 +367,7 @@ def run(root_dir: str,
         ]
     ],
                     dtype=float)
+    R_pw *= 2
     # R_pw[0, :] = 5.0
     # R_pw[1, :] = 10.0
     # R_pw[2, :] = 15.0
@@ -476,7 +480,7 @@ def run(root_dir: str,
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts
     # ===== SETS =====
-    P = len(sym_list)  # number of pose parameters
+    P = len(list(sym_list))  # number of pose parameters
     L = len(markers)  # number of dlc labels per frame
     C = len(k_arr)  # number of cameras
     if single_view > 0:
@@ -490,7 +494,7 @@ def run(root_dir: str,
     m.D2 = pyo.RangeSet(2)
     m.D3 = pyo.RangeSet(3)
     # Number of pairwise terms to include + the base measurement.
-    m.W = pyo.RangeSet(1)
+    m.W = pyo.RangeSet(pairwise_included + 1 if pairwise_included <= 2 and pairwise_included >= 0 else 1)
     m.NW = pyo.RangeSet(N - window_size)
 
     index_dict = misc.get_dlc_marker_indices()
@@ -639,13 +643,14 @@ def run(root_dir: str,
 
         m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
     else:
-        # def shutter_base_constraint(m):
-        #     return m.shutter_delay[1] == 0.0
+
+        def shutter_base_constraint(m):
+            return m.shutter_delay[1] == 0.0
 
         def shutter_delay_constraint(m, c):
-            return abs(m.shutter_delay[c]) <= m.Ts if c > 1 else m.shutter_delay[c] == 0.0
+            return abs(m.shutter_delay[c]) <= m.Ts
 
-        # m.shutter_base_constraint = pyo.Constraint(rule=shutter_base_constraint)
+        m.shutter_base_constraint = pyo.Constraint(rule=shutter_base_constraint)
         m.shutter_delay_constraint = pyo.Constraint(m.C, rule=shutter_delay_constraint)
 
     # MEASUREMENT
@@ -713,10 +718,10 @@ def run(root_dir: str,
 
     m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_13"])], np.pi))
     m.l_front_ankle_theta_14 = pyo.Constraint(m.N,
-                                              rule=lambda m, n: (-np.pi / 3, m.x[n, pyo_i(idx["theta_14"])],
+                                              rule=lambda m, n: (-np.pi / 4, m.x[n, pyo_i(idx["theta_14"])],
                                                                  (3 / 4) * np.pi))
     m.r_front_ankle_theta_15 = pyo.Constraint(m.N,
-                                              rule=lambda m, n: (-np.pi / 3, m.x[n, pyo_i(idx["theta_15"])],
+                                              rule=lambda m, n: (-np.pi / 4, m.x[n, pyo_i(idx["theta_15"])],
                                                                  (3 / 4) * np.pi))
     m.l_back_ankle_theta_16 = pyo.Constraint(m.N,
                                              rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_16"])], 0))
@@ -726,27 +731,47 @@ def run(root_dir: str,
     logger.info("Constaint initialisation...Done")
 
     # ======= OBJECTIVE FUNCTION =======
-    def obj(m):
-        slack_model_err = 0.0
-        slack_motion_err = 0.0
-        slack_meas_err = 0.0
-        for n in m.N:
-            #Model Error
-            for p in m.P:
-                slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
-                if single_view > 0:
+    if single_view > 0:
+
+        def obj_single(m):
+            slack_model_err = 0.0
+            slack_motion_err = 0.0
+            slack_meas_err = 0.0
+            for n in m.N:
+                #Model Error
+                for p in m.P:
+                    slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
                     slack_motion_err += m.motion_err_weight[p] * m.slack_motion[n, p]**2
                     # slack_motion_err += (1 / 0.1 * m.slack_motion[n, p])**2
-            #Measurement Error
-            for l in m.L:
-                for c in m.C:
-                    for d2 in m.D2:
-                        for w in m.W:
-                            slack_meas_err += loss_function(
-                                m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
-        return 1e-3 * (slack_meas_err + slack_model_err + slack_motion_err)
+                #Measurement Error
+                for l in m.L:
+                    for c in m.C:
+                        for d2 in m.D2:
+                            for w in m.W:
+                                slack_meas_err += loss_function(
+                                    m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
+            return 1e-3 * (slack_meas_err + slack_model_err + slack_motion_err)
 
-    m.obj = pyo.Objective(rule=obj)
+        m.obj = pyo.Objective(rule=obj_single)
+    else:
+
+        def obj_multi(m):
+            slack_model_err = 0.0
+            slack_meas_err = 0.0
+            for n in m.N:
+                #Model Error
+                for p in m.P:
+                    slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
+                #Measurement Error
+                for l in m.L:
+                    for c in m.C:
+                        for d2 in m.D2:
+                            for w in m.W:
+                                slack_meas_err += loss_function(
+                                    m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
+            return 1e-3 * (slack_meas_err + slack_model_err)
+
+        m.obj = pyo.Objective(rule=obj_multi)
 
     logger.info("Objective initialisation...Done")
     # RUN THE SOLVER
