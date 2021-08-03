@@ -553,7 +553,7 @@ def run(root_dir: str,
         m.x_prediction = pyo.Var(m.NW, m.P)
         m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
     else:
-        m.shutter_delay = pyo.Var(m.N, m.C, initialize=0.0)
+        m.shutter_delay = pyo.Var(m.C, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
@@ -643,14 +643,14 @@ def run(root_dir: str,
 
         m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
     else:
-        m.shutter_base_constraint = pyo.Constraint(m.N, rule=lambda m, n: m.shutter_delay[n, 1] == 0.0)
-        m.shutter_delay_constraint = pyo.Constraint(m.N, m.C, rule=lambda m, n, c: (-m.Ts, m.shutter_delay[n, c], m.Ts))
+        m.shutter_base_constraint = pyo.Constraint(rule=lambda m: m.shutter_delay[1] == 0.0)
+        m.shutter_delay_constraint = pyo.Constraint(m.C, rule=lambda m, c: (-m.Ts, m.shutter_delay[c], m.Ts))
 
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
         #project
         cam_idx = single_view - 1 if single_view > 0 else c - 1
-        tau = 0.0 if single_view > 0 else m.shutter_delay[n, c]
+        tau = 0.0 if single_view > 0 else m.shutter_delay[c]
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
         x = m.poses[n, l, pyo_i(idx["x_0"])] + m.dx[n, pyo_i(idx["x_0"])] * tau
         y = m.poses[n, l, pyo_i(idx["y_0"])] + m.dx[n, pyo_i(idx["y_0"])] * tau
@@ -762,7 +762,7 @@ def run(root_dir: str,
                             for w in m.W:
                                 slack_meas_err += loss_function(
                                     m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
-            return 1e-2 * (slack_meas_err + slack_model_err)
+            return 1e-3 * (slack_meas_err + slack_model_err)
 
         m.obj = pyo.Objective(rule=obj_multi)
 
@@ -797,11 +797,11 @@ def run(root_dir: str,
 
     logger.info("Generate outputs...")
     if single_view == 0:
-        # print("shutter delay:", [[m.shutter_delay[n, c].value for n in m.N] for c in m.C])
-        for c in m.C:
-            result = pd.DataFrame(pd.Series([m.shutter_delay[n, c].value for n in m.N]).describe()).transpose()
-            print(f'Camera {c}')
-            print(result)
+        print("shutter delay:", [m.shutter_delay[c].value for c in m.C])
+        # for c in m.C:
+        #     result = pd.DataFrame(pd.Series([m.shutter_delay[n, c].value for n in m.N]).describe()).transpose()
+        #     print(f'Camera {c}')
+        #     print(result)
 
     # ===== SAVE FTE RESULTS =====
     x_optimised = get_vals_v(m.x, [m.N, m.P])
