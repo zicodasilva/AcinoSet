@@ -105,6 +105,14 @@ def plot_trajectory(fte_file: str, scene_file: str, centered=False):
                                     centered=centered)
 
 
+def compare_trajectories(fte_file1: str, fte_file2: str, scene_file: str, centered=False):
+    app.plot_multiple_cheetah_reconstructions([fte_file1, fte_file2],
+                                              scene_fname=scene_file,
+                                              reprojections=False,
+                                              dark_mode=True,
+                                              centered=centered)
+
+
 def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_reprojections=False, centered=False):
     fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
@@ -367,10 +375,10 @@ def run(root_dir: str,
         ]
     ],
                     dtype=float)
-    # R_pw *= 2
-    R_pw[0, :] = 5.0
-    R_pw[1, :] = 10.0
-    R_pw[2, :] = 15.0
+    R_pw *= 1.5
+    # R_pw[0, :] = 5.0
+    # R_pw[1, :] = 10.0
+    # R_pw[2, :] = 15.0
 
     Q = [  # model parameters variance
         4,
@@ -398,10 +406,10 @@ def run(root_dir: str,
         243,  # l_back_knee
         334,  # r_hip
         149,  # r_back_knee
-        242,  # l_front_ankle
-        200,  # r_front_ankle
-        205,  # l_back_ankle
-        216  # r_back_ankle
+        91,  # l_front_ankle
+        91,  # r_front_ankle
+        132,  # l_back_ankle
+        132  # r_back_ankle
     ]
     Q = np.array(Q, dtype=float)**2
 
