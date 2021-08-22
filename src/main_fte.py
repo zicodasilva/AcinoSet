@@ -1,7 +1,8 @@
 import os
 import platform
 import json
-from typing import Union, Tuple
+import random
+from typing import Union, Tuple, Dict, List
 import numpy as np
 from pyomo.core.expr.current import log as pyomo_log
 import sympy as sp
@@ -12,7 +13,7 @@ from tqdm import tqdm
 from scipy.interpolate import UnivariateSpline
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
-from lib import misc, utils, app
+from lib import misc, utils, app, metric
 from lib.calib import triangulate_points_fisheye, project_points_fisheye
 from py_utils import data_ops, log
 from sklearn.linear_model import LinearRegression
@@ -21,8 +22,153 @@ from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
 
+import matplotlib.pyplot as plt
+
+plt.style.use(os.path.join("../configs", "mplstyle.yaml"))
+
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
+
+
+def metrics(
+    root_dir: str,
+    data_path: str,
+    start_frame: int,
+    end_frame: int,
+    dlc_thresh: float = 0.5,
+    out_dir_prefix: str = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+
+    if out_dir_prefix:
+        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw")
+    else:
+        out_dir = os.path.join(root_dir, data_path, "fte_pw")
+    # load DLC data
+    data_dir = os.path.join(root_dir, data_path)
+    dlc_dir = os.path.join(data_dir, "dlc_pw")
+    assert os.path.exists(dlc_dir)
+
+    try:
+        k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
+    except Exception:
+        logger.error("Early exit because extrinsic calibration files could not be located")
+        return []
+    d_arr = d_arr.reshape((-1, 4))
+
+    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
+    assert n_cams == len(dlc_points_fpaths), f"# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json"
+
+    # calculate residual error
+    states = data_ops.load_pickle(os.path.join(out_dir, "fte.pickle"))
+    markers = misc.get_markers()
+    data_location = data_path.split("/")
+    test_data = [loc.capitalize() for loc in data_location]
+    gt_data = str.join("", test_data)
+    gt_data = gt_data.replace("Top", "").replace("Bottom", "")
+    try:
+        points_2d_df = pd.read_csv(os.path.join("/Users/zico/msc/data/gt_labels", gt_data, f"{gt_data}.csv"))
+    except FileNotFoundError:
+        logger.warning("No ground truth labels for this test.")
+        points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
+        points_2d_df = points_2d_df[points_2d_df["likelihood"] > dlc_thresh]  # ignore points with low likelihood
+
+    positions_3ds = misc.get_all_marker_coords_from_states(states, n_cams)
+    points_3d_dfs = []
+    for positions_3d in positions_3ds:
+        frames = np.arange(start_frame - 1, end_frame).reshape((-1, 1))
+        n_frames = len(frames)
+        points_3d = []
+        for i, m in enumerate(markers):
+            _pt3d = np.squeeze(positions_3d[:, i, :])
+            marker_arr = np.array([m] * n_frames).reshape((-1, 1))
+            _pt3d = np.hstack((frames, marker_arr, _pt3d))
+            points_3d.append(_pt3d)
+        points_3d_df = pd.DataFrame(
+            np.vstack(points_3d),
+            columns=["frame", "marker", "x", "y", "z"],
+        ).astype({
+            "frame": "int64",
+            "marker": "str",
+            "x": "float64",
+            "y": "float64",
+            "z": "float64"
+        })
+        points_3d_dfs.append(points_3d_df)
+    pix_errors = metric.residual_error(points_2d_df, points_3d_dfs, markers,
+                                       (k_arr, d_arr, r_arr, t_arr, cam_res, n_cams))
+    save_error_dists(pix_errors, out_dir)
+
+    # Calculate the per marker error and save results.
+    marker_errors = dict.fromkeys(markers, [])
+    # Calculate the number of measurements included for each marker.
+    meas_weights = states.get("meas_weight")
+    num_included_meas = dict.fromkeys(markers, 0)
+    for i, m in enumerate(markers):
+        marker_meas_weights = meas_weights[:, :, i, :].flatten()
+        num_included_meas[m] = 100.0 * (((marker_meas_weights != 0.0).sum()) / len(marker_meas_weights))
+        temp_dist = []
+        for k, df in pix_errors.items():
+            temp_dist += df.query(f"marker == '{m}'")["pixel_residual"].tolist()
+        marker_errors[m] = np.asarray(list(map(float, temp_dist)))
+
+    meas_stats_df = pd.DataFrame(num_included_meas, index=["%"])
+    error_df = pd.DataFrame(
+        pd.DataFrame(dict([(k, pd.Series(v)) for k, v in marker_errors.items()])).describe(include="all")).transpose()
+    error_df.to_csv(os.path.join(out_dir, "reprojection_results.csv"))
+    meas_stats_df.to_csv(os.path.join(out_dir, "measurement_results.csv"))
+
+    return error_df, meas_stats_df
+
+
+def save_error_dists(pix_errors, output_dir: str):
+    # Calculated PCK threshold from the training dataset average nose to eye(s) length.
+    pck_threshold = 18.3958
+    ratio = 0.5
+    distances = []
+    # residuals_u = []
+    # residuals_v = []
+    for k, df in pix_errors.items():
+        distances += df["pixel_residual"].tolist()
+        # residuals_u += df["error_u"].tolist()
+        # residuals_v += df["error_v"].tolist()
+    distances = np.asarray(list(map(float, distances)))
+    # residuals_u = list(map(float, residuals_u))
+    # residuals_v = list(map(float, residuals_v))
+    # residuals = np.vstack((residuals_u, residuals_v)).T
+
+    pck = 100.0 * (np.sum(distances <= (ratio * pck_threshold)) / len(distances))
+
+    # plot the error histogram
+    xlabel = "Error [px]"
+    ylabel = "Frequency"
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.hist(distances, bins=50)
+    ax.set_title(
+        f"Error Overview (N={len(distances)}, \u03BC={np.mean(distances):.3f}, med={np.median(distances):.3f}, PCK={pck:.3f})"
+    )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    fig.savefig(os.path.join(output_dir, "overall_error_hist.pdf"))
+
+    hist_data = []
+    labels = []
+    for k, df in pix_errors.items():
+        i = int(k)
+        e = df["pixel_residual"].tolist()
+        e = list(map(float, e))
+        hist_data.append(e)
+        labels.append("cam{} (N={})".format(i + 1, len(e)))
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.hist(hist_data, bins=10, density=True, histtype="bar")
+    ax.legend(labels)
+    ax.set_title("Reprojection Pixel Error")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    fig.savefig(os.path.join(output_dir, "cams_error_hist.pdf"))
 
 
 def train_motion_model(window_size: int) -> Tuple[Pipeline, np.ndarray]:
@@ -86,7 +232,7 @@ def measurements_to_df(m: pyo.ConcreteModel):
 
 def get_vals_v(var: Union[pyo.Var, pyo.Param], idxs: list) -> np.ndarray:
     """
-    Verbose version that doesn't try to guess stuff for ya. Usage:
+    Verbose version that doesn"t try to guess stuff for ya. Usage:
     >>> get_vals(m.q, (m.N, m.DOF))
     """
     arr = np.array([pyo.value(var[idx]) for idx in var]).astype(float)
@@ -200,6 +346,8 @@ def run(root_dir: str,
         end_frame: int,
         dlc_thresh: float,
         loss="redescending",
+        filtered_markers: Tuple[str] = None,
+        num_filtered: int = 20,
         pairwise_included: int = 0,
         single_view: int = 0,
         init_ekf=False,
@@ -508,6 +656,14 @@ def run(root_dir: str,
     index_dict = misc.get_dlc_marker_indices()
     pair_dict = misc.get_pairwise_graph()
 
+    drop_out_frames = []
+    if num_filtered > 0:
+        burst_length = 10
+        drop_out_frames = random.sample(range(start_frame, end_frame), num_filtered // burst_length)
+        drop_out_frames = [np.arange(i, i + burst_length) for i in drop_out_frames]
+        drop_out_frames = np.hstack(drop_out_frames)
+        logger.info(f"Drop out frames: {*drop_out_frames,}")
+
     # ======= WEIGHTS =======
     def init_meas_weights(m, n, c, l, w):
         # Determine if the current measurement is the base prediction or a pairwise prediction.
@@ -520,6 +676,8 @@ def run(root_dir: str,
         else:
             base = pair_dict[marker][w - 2]
 
+        if (n - 1) in drop_out_frames and marker in filtered_markers:
+            return 0.0
         # Filter measurements based on DLC threshold.
         # This does ensures that badly predicted points are not considered in the objective function.
         return 1 / R_pw[w - 1][l - 1] if likelihoods[base] > dlc_thresh else 0.0
@@ -808,7 +966,7 @@ def run(root_dir: str,
         print("shutter delay:", [m.shutter_delay[c].value for c in m.C])
         # for c in m.C:
         #     result = pd.DataFrame(pd.Series([m.shutter_delay[n, c].value for n in m.N]).describe()).transpose()
-        #     print(f'Camera {c}')
+        #     print(f"Camera {c}")
         #     print(result)
 
     # ===== SAVE FTE RESULTS =====
@@ -820,6 +978,7 @@ def run(root_dir: str,
     model_err = get_vals_v(m.slack_model, [m.N, m.P])
     meas_err = get_vals_v(m.slack_meas, [m.N, m.C, m.L, m.D2, m.W])
     meas_weight = get_vals_v(m.meas_err_weight, [m.N, m.C, m.L, m.W])
+    shutter_delay = get_vals_v(m.shutter_delay, [m.C])
     v_vec = [np.arctan2(dx_optimised[n - 1][1], dx_optimised[n - 1][0]) for n in m.N]
 
     states = dict(x=x_optimised,
@@ -828,19 +987,22 @@ def run(root_dir: str,
                   velocity_vector=v_vec,
                   model_err=model_err,
                   model_weight=model_weight,
-                  meas_err=meas_err.squeeze(),
-                  meas_weight=meas_weight.squeeze())
+                  meas_err=meas_err,
+                  meas_weight=meas_weight,
+                  shutter_delay=shutter_delay)
+
+    positions_3ds = misc.get_all_marker_coords_from_states(states, n_cams)
 
     out_fpath = os.path.join(out_dir, "fte.pickle")
-    app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
-    app.save_3d_cheetah_as_2d(positions,
-                              out_dir,
-                              scene_fpath,
-                              markers,
-                              project_points_fisheye,
-                              start_frame,
-                              out_fname="fte",
-                              vid_dir=data_dir)
+    utils.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
+    utils.save_3d_cheetah_as_2d(positions_3ds,
+                                out_dir,
+                                scene_fpath,
+                                markers,
+                                project_points_fisheye,
+                                start_frame,
+                                out_fname="fte",
+                                vid_dir=data_dir)
 
     # Create 2D reprojection videos.
     if generate_reprojection_videos:

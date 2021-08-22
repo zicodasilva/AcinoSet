@@ -1,4 +1,5 @@
 import sys
+from typing import List
 import numpy as np
 import sympy as sp
 
@@ -158,7 +159,23 @@ def get_pairwise_graph():
     # }
 
 
-def get_3d_marker_coords(x):
+def get_all_marker_coords_from_states(states, n_cam: int) -> List:
+    shutter_delay = states.get("shutter_delay")
+
+    marker_pos_arr = []
+    for i in range(n_cam):
+        if shutter_delay is not None:
+            tau = shutter_delay[i]
+            marker_pos = np.array(
+                [get_3d_marker_coords(x, dx, ddx, tau) for x, dx, ddx in zip(states["x"], states["dx"], states["ddx"])])
+        else:
+            marker_pos = np.array([get_3d_marker_coords(x) for x in states['x']])
+        marker_pos_arr.append(marker_pos)
+
+    return marker_pos_arr
+
+
+def get_3d_marker_coords(x, dx=None, ddx=None, tau: float = 0.0):
     """Returns either a numpy array or a sympy Matrix of the 3D marker coordinates (shape Nx3) for a given state vector x.
     """
     idx = get_pose_params()
@@ -204,7 +221,11 @@ def get_3d_marker_coords(x):
     R17_I = RI_17.T
 
     # positions
-    p_head = func([x[idx['x_0']], x[idx['y_0']], x[idx['z_0']]])
+    head_x = x[idx['x_0']] + dx[idx['x_0']] * tau + ddx[idx['x_0']] * (tau**2)
+    head_y = x[idx['y_0']] + dx[idx['y_0']] * tau + ddx[idx['y_0']] * (tau**2)
+    head_z = x[idx['z_0']] + dx[idx['z_0']] * tau + ddx[idx['z_0']] * (tau**2)
+    # p_head = func([x[idx['x_0']], x[idx['y_0']], x[idx['z_0']]])
+    p_head = func([head_x, head_y, head_z])
 
     p_l_eye = p_head + R0_I @ func([0, 0.03, 0])
     p_r_eye = p_head + R0_I @ func([0, -0.03, 0])
