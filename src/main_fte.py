@@ -347,7 +347,7 @@ def run(root_dir: str,
         dlc_thresh: float,
         loss="redescending",
         filtered_markers: Tuple = (),
-        num_filtered: int = 0,
+        drop_out_frame_ranges: List[Tuple] = [()],
         pairwise_included: int = 0,
         single_view: int = 0,
         init_ekf=False,
@@ -657,12 +657,10 @@ def run(root_dir: str,
     pair_dict = misc.get_pairwise_graph()
 
     drop_out_frames = []
-    if num_filtered > 0:
-        burst_length = 10
-        drop_out_frames = random.sample(range(start_frame, end_frame), num_filtered // burst_length)
-        drop_out_frames = [np.arange(i, i + burst_length) for i in drop_out_frames]
+    if len(drop_out_frame_ranges) > 0:
+        drop_out_frames = [np.arange(val_range[0], val_range[1]) for val_range in drop_out_frame_ranges]
         drop_out_frames = np.hstack(drop_out_frames)
-        logger.info(f"Drop out frames: {*drop_out_frames,}")
+        logger.info(f"Drop out frames [{len(drop_out_frames)}]: {*drop_out_frames,}")
 
     # ======= WEIGHTS =======
     def init_meas_weights(m, n, c, l, w):
@@ -673,11 +671,11 @@ def run(root_dir: str,
         likelihoods = values["pose"][2::3]
         if w < 2:
             base = index_dict[marker]
+            if (n - 1) in drop_out_frames and marker in filtered_markers:
+                return 0.0
         else:
             base = pair_dict[marker][w - 2]
 
-        if (n - 1) in drop_out_frames and marker in filtered_markers:
-            return 0.0
         # Filter measurements based on DLC threshold.
         # This does ensures that badly predicted points are not considered in the objective function.
         return 1 / R_pw[w - 1][l - 1] if likelihoods[base] > dlc_thresh else 0.0
@@ -993,6 +991,8 @@ def run(root_dir: str,
 
     positions_3ds = misc.get_all_marker_coords_from_states(states, n_cams)
 
+    del m
+
     out_fpath = os.path.join(out_dir, "fte.pickle")
     utils.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
     utils.save_3d_cheetah_as_2d(positions_3ds,
@@ -1098,7 +1098,15 @@ if __name__ == "__main__":
         "2017_09_03/top/zorro/run1_1": (4, 203),
         "2019_02_27/kiara/run": (10, 110),
         "2017_09_02/bottom/jules/run2": (35, 171),
-        "2017_09_03/bottom/zorro/run2_2": (32, 141)
+        "2017_09_03/bottom/zorro/run2_2": (32, 141),
+        "2019_03_05/lily/flick": (100, 200),
+        "2017_08_29/top/zorro/flick1_2": (20, 140),
+        "2017_09_02/bottom/phantom/flick2_1": (5, 100),
+        "2017_12_12/bottom/big_girl/flick2": (30, 100),
+        "2019_03_03/phantom/flick": (270, 460),
+        "2019_03_09/lily/flick": (10, 100),
+        "2019_03_09/jules/flick2": (40, 185),
+        "2017_09_03/top/zorro/flick1_1": (62, 150)
     }
     # manually_selected_frames = {
     #     "2017_08_29/top/phantom/run1_1": (20, 170),
@@ -1111,6 +1119,10 @@ if __name__ == "__main__":
     #     "2017_12_12/bottom/big_girl/flick2": (30, 100),
     #     "2019_03_03/phantom/flick": (270, 460),
     # }
+    valid_vids = ("2019_03_09/lily/flick", "2019_03_09/jules/flick2", "2017_09_03/top/zorro/flick1_1",
+                  "2017_12_21/top/lily/flick1", "2017_12_21/bottom/jules/flick2_1",
+                  "2017_12_16/bottom/phantom/flick2_1", "2017_12_16/bottom/phantom/flick2_2"
+                  "2017_09_03/top/phantom/flick1", "2017_09_02/top/jules/flick1_1", "2017_08_29/top/phantom/flick1_1")
     bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1", "2017_12_17/top/zorro/flick1")
     if platform.python_implementation() == "PyPy":
         time0 = time()
@@ -1128,7 +1140,7 @@ if __name__ == "__main__":
         optimiser.options["OF_accept_every_trial_step"] = "yes"
         optimiser.options["linear_solver"] = "ma86"
         optimiser.options["OF_ma86_scaling"] = "none"
-        valid_vids = set(manually_selected_frames.keys())
+        # valid_vids = set(manually_selected_frames.keys())
         for test_vid in tqdm(tests):
             # Force garbage collection so that the repeated model creation does not overflow the memory!
             gc.collect()
@@ -1148,6 +1160,7 @@ if __name__ == "__main__":
                     start_frame=start,
                     end_frame=end,
                     dlc_thresh=0.5,
+                    pairwise_included=0,
                     opt=optimiser,
                     out_dir_prefix=dir_prefix)
             except Exception:
@@ -1156,6 +1169,7 @@ if __name__ == "__main__":
                     start_frame=-1,
                     end_frame=1,
                     dlc_thresh=0.5,
+                    pairwise_included=0,
                     opt=optimiser,
                     out_dir_prefix=dir_prefix)
 
