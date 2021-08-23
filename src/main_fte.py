@@ -347,7 +347,7 @@ def run(root_dir: str,
         dlc_thresh: float,
         loss="redescending",
         filtered_markers: Tuple = (),
-        drop_out_frame_ranges: List[Tuple] = [()],
+        drop_out_frames: List[int] = [],
         pairwise_included: int = 0,
         single_view: int = 0,
         init_ekf=False,
@@ -656,10 +656,9 @@ def run(root_dir: str,
     index_dict = misc.get_dlc_marker_indices()
     pair_dict = misc.get_pairwise_graph()
 
-    drop_out_frames = []
-    if len(drop_out_frame_ranges) > 0:
-        drop_out_frames = [np.arange(val_range[0], val_range[1]) for val_range in drop_out_frame_ranges]
-        drop_out_frames = np.hstack(drop_out_frames)
+    filtered_marker_indices = [index_dict[m] for m in filtered_markers]
+    if len(drop_out_frames) > 0:
+        logger.info(f"Drop out marker indices: {*filtered_marker_indices,}")
         logger.info(f"Drop out frames [{len(drop_out_frames)}]: {*drop_out_frames,}")
 
     # ======= WEIGHTS =======
@@ -671,10 +670,12 @@ def run(root_dir: str,
         likelihoods = values["pose"][2::3]
         if w < 2:
             base = index_dict[marker]
-            if (n - 1) in drop_out_frames and marker in filtered_markers:
-                return 0.0
         else:
             base = pair_dict[marker][w - 2]
+
+        # Filter measurements based on manual dropping.
+        if (n - 1 + start_frame) in drop_out_frames and base in filtered_marker_indices:
+            return 0.0
 
         # Filter measurements based on DLC threshold.
         # This does ensures that badly predicted points are not considered in the objective function.

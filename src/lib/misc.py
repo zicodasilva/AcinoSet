@@ -125,7 +125,8 @@ def get_pairwise_graph():
         "r_shoulder": [3, 24],
         "r_front_knee": [2, 4],
         "r_front_ankle": [2, 3],
-        "r_front_paw": [3, 4],
+        # "r_front_paw": [3, 4],
+        "r_front_paw": [3, 2],
         "l_hip": [18, 22],
         "l_back_knee": [17, 19],
         "l_back_ankle": [17, 18],
@@ -133,7 +134,8 @@ def get_pairwise_graph():
         "r_hip": [8, 22],
         "r_back_knee": [7, 9],
         "r_back_ankle": [7, 8],
-        "r_back_paw": [8, 9]
+        # "r_back_paw": [8, 9]
+        "r_back_paw": [8, 7]
     }
     # return {
     #     "r_eye": [23, 24],
