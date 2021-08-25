@@ -349,6 +349,7 @@ def run(root_dir: str,
         filtered_markers: Tuple = (),
         drop_out_frames: List[int] = [],
         pairwise_included: int = 0,
+        enable_shutter_delay: bool = False,
         single_view: int = 0,
         init_ekf=False,
         opt=None,
@@ -717,7 +718,7 @@ def run(root_dir: str,
     if single_view > 0:
         m.x_prediction = pyo.Var(m.NW, m.P)
         m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
-    else:
+    elif enable_shutter_delay:
         m.shutter_delay = pyo.Var(m.C, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
@@ -807,7 +808,7 @@ def run(root_dir: str,
                 return pyo.Constraint.Skip
 
         m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
-    else:
+    elif enable_shutter_delay:
         m.shutter_base_constraint = pyo.Constraint(rule=lambda m: m.shutter_delay[1] == 0.0)
         m.shutter_delay_constraint = pyo.Constraint(m.C, rule=lambda m, c: (-m.Ts, m.shutter_delay[c], m.Ts))
 
@@ -815,7 +816,10 @@ def run(root_dir: str,
     def measurement_constraints(m, n, c, l, d2, w):
         #project
         cam_idx = single_view - 1 if single_view > 0 else c - 1
-        tau = 0.0 if single_view > 0 else m.shutter_delay[c]
+        if enable_shutter_delay:
+            tau = 0.0 if single_view > 0 else m.shutter_delay[c]
+        else:
+            tau = 0.0
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
         x = m.poses[n, l, pyo_i(idx["x_0"])] + m.dx[n, pyo_i(idx["x_0"])] * tau
         y = m.poses[n, l, pyo_i(idx["y_0"])] + m.dx[n, pyo_i(idx["y_0"])] * tau
@@ -961,12 +965,8 @@ def run(root_dir: str,
     app.stop_logging()
 
     logger.info("Generate outputs...")
-    if single_view == 0:
+    if single_view == 0 and enable_shutter_delay:
         print("shutter delay:", [m.shutter_delay[c].value for c in m.C])
-        # for c in m.C:
-        #     result = pd.DataFrame(pd.Series([m.shutter_delay[n, c].value for n in m.N]).describe()).transpose()
-        #     print(f"Camera {c}")
-        #     print(result)
 
     # ===== SAVE FTE RESULTS =====
     x_optimised = get_vals_v(m.x, [m.N, m.P])
@@ -977,7 +977,7 @@ def run(root_dir: str,
     model_err = get_vals_v(m.slack_model, [m.N, m.P])
     meas_err = get_vals_v(m.slack_meas, [m.N, m.C, m.L, m.D2, m.W])
     meas_weight = get_vals_v(m.meas_err_weight, [m.N, m.C, m.L, m.W])
-    shutter_delay = get_vals_v(m.shutter_delay, [m.C])
+    shutter_delay = get_vals_v(m.shutter_delay, [m.C]) if enable_shutter_delay else None
     v_vec = [np.arctan2(dx_optimised[n - 1][1], dx_optimised[n - 1][0]) for n in m.N]
 
     states = dict(x=x_optimised,

@@ -12,8 +12,8 @@ if __name__ == "__main__":
     root_dir = os.path.join(
         "/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos")
     root_results_dir = "/Users/zico/msc/data/PairwiseExperimentResults3"
-    burst_lengths = (1, 3, 5, 10)
-    num_drop_outs = (0, 20, 40, 60, 80)
+    burst_lengths = (1, 5, 10, 15)
+    num_drop_outs = (0, 25, 50, 75, 90)
     drop_out_range = (20, 100)
     data_path = os.path.join("2017_08_29", "top", "jules", "run1_1")
     start_frame = 10
@@ -27,11 +27,11 @@ if __name__ == "__main__":
         for burst in burst_lengths:
             for num_filtered in num_drop_outs:
                 out_prefix = os.path.join(root_results_dir, test, f"{num_filtered}_percent_{burst}_burst")
-                print(f"Run test: {out_prefix}")
                 try:
                     drop_out_frames = drop_out_dataset[str((burst, num_filtered))].values
                 except KeyError:
                     continue
+                print(f"Run test: {out_prefix}")
                 drop_out_frames = drop_out_frames[~np.isnan(drop_out_frames)]
                 drop_out_frames = drop_out_frames.astype(int).tolist()
                 # Run the optimisation

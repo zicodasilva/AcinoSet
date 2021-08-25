@@ -125,8 +125,7 @@ def get_pairwise_graph():
         "r_shoulder": [3, 24],
         "r_front_knee": [2, 4],
         "r_front_ankle": [2, 3],
-        # "r_front_paw": [3, 4],
-        "r_front_paw": [3, 2],
+        "r_front_paw": [3, 4],
         "l_hip": [18, 22],
         "l_back_knee": [17, 19],
         "l_back_ankle": [17, 18],
@@ -134,8 +133,7 @@ def get_pairwise_graph():
         "r_hip": [8, 22],
         "r_back_knee": [7, 9],
         "r_back_ankle": [7, 8],
-        # "r_back_paw": [8, 9]
-        "r_back_paw": [8, 7]
+        "r_back_paw": [8, 9]
     }
     # return {
     #     "r_eye": [23, 24],
@@ -223,11 +221,13 @@ def get_3d_marker_coords(x, dx=None, ddx=None, tau: float = 0.0):
     R17_I = RI_17.T
 
     # positions
-    head_x = x[idx['x_0']] + dx[idx['x_0']] * tau + ddx[idx['x_0']] * (tau**2)
-    head_y = x[idx['y_0']] + dx[idx['y_0']] * tau + ddx[idx['y_0']] * (tau**2)
-    head_z = x[idx['z_0']] + dx[idx['z_0']] * tau + ddx[idx['z_0']] * (tau**2)
-    # p_head = func([x[idx['x_0']], x[idx['y_0']], x[idx['z_0']]])
-    p_head = func([head_x, head_y, head_z])
+    if dx is None and ddx is None:
+        p_head = func([x[idx['x_0']], x[idx['y_0']], x[idx['z_0']]])
+    else:
+        head_x = x[idx['x_0']] + dx[idx['x_0']] * tau + ddx[idx['x_0']] * (tau**2)
+        head_y = x[idx['y_0']] + dx[idx['y_0']] * tau + ddx[idx['y_0']] * (tau**2)
+        head_z = x[idx['z_0']] + dx[idx['z_0']] * tau + ddx[idx['z_0']] * (tau**2)
+        p_head = func([head_x, head_y, head_z])
 
     p_l_eye = p_head + R0_I @ func([0, 0.03, 0])
     p_r_eye = p_head + R0_I @ func([0, -0.03, 0])
