@@ -65,8 +65,10 @@ def metrics(
     test_data = [loc.capitalize() for loc in data_location]
     gt_data = str.join("", test_data)
     gt_data = gt_data.replace("Top", "").replace("Bottom", "")
+    gt_points_3d_df = None
     try:
         points_2d_df = pd.read_csv(os.path.join("/Users/zico/msc/data/gt_labels", gt_data, f"{gt_data}.csv"))
+        gt_points_3d_df = pd.read_csv(os.path.join("/Users/zico/msc/data/gt_labels", gt_data, f"{gt_data}_3D.csv"))
     except FileNotFoundError:
         logger.warning("No ground truth labels for this test.")
         points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
@@ -94,12 +96,13 @@ def metrics(
             "z": "float64"
         })
         points_3d_dfs.append(points_3d_df)
-    pix_errors = metric.residual_error(points_2d_df, points_3d_dfs, markers,
-                                       (k_arr, d_arr, r_arr, t_arr, cam_res, n_cams))
-    save_error_dists(pix_errors, out_dir)
+    px_errors = metric.residual_error(points_2d_df, points_3d_dfs, markers,
+                                      (k_arr, d_arr, r_arr, t_arr, cam_res, n_cams))
+    save_error_dists(px_errors, out_dir)
 
     # Calculate the per marker error and save results.
-    marker_errors = dict.fromkeys(markers, [])
+    marker_errors_2d = dict.fromkeys(markers, [])
+    marker_errors_3d = dict.fromkeys(markers, [])
     # Calculate the number of measurements included for each marker.
     meas_weights = states.get("meas_weight")
     num_included_meas = dict.fromkeys(markers, 0)
@@ -107,22 +110,36 @@ def metrics(
         marker_meas_weights = meas_weights[:, :, i, :].flatten()
         num_included_meas[m] = 100.0 * (((marker_meas_weights != 0.0).sum()) / len(marker_meas_weights))
         temp_dist = []
-        for k, df in pix_errors.items():
+        for k, df in px_errors.items():
             temp_dist += df.query(f"marker == '{m}'")["pixel_residual"].tolist()
-        marker_errors[m] = np.asarray(list(map(float, temp_dist)))
+        marker_errors_2d[m] = np.asarray(list(map(float, temp_dist)))
 
     meas_stats_df = pd.DataFrame(num_included_meas, index=["%"])
     error_df = pd.DataFrame(
-        pd.DataFrame(dict([(k, pd.Series(v)) for k, v in marker_errors.items()])).describe(include="all")).transpose()
+        pd.DataFrame(dict([(k, pd.Series(v))
+                           for k, v in marker_errors_2d.items()])).describe(include="all")).transpose()
     error_df.to_csv(os.path.join(out_dir, "reprojection_results.csv"))
     meas_stats_df.to_csv(os.path.join(out_dir, "measurement_results.csv"))
+
+    if gt_points_3d_df is not None:
+        pos_errors = metric.residual_error_3d(gt_points_3d_df, points_3d_dfs[0], markers)
+        marker_errors_3d = dict.fromkeys(markers, [])
+        for i, m in enumerate(markers):
+            temp_dist = pos_errors.query(f"marker == '{m}'")["position_error_mm"].tolist()
+            marker_errors_3d[m] = np.asarray(list(map(float, temp_dist)))
+
+        error_3d_df = pd.DataFrame(
+            pd.DataFrame(dict([(k, pd.Series(v))
+                               for k, v in marker_errors_3d.items()])).describe(include="all")).transpose()
+        error_3d_df.to_csv(os.path.join(out_dir, "position_error_summary.csv"))
+        pos_errors.to_csv(os.path.join(out_dir, "position_error.csv"))
 
     return error_df, meas_stats_df
 
 
 def save_error_dists(pix_errors, output_dir: str):
     # Calculated PCK threshold from the training dataset average nose to eye(s) length.
-    pck_threshold = 18.3958
+    pck_threshold = 15.3686
     ratio = 0.5
     distances = []
     # residuals_u = []
@@ -137,6 +154,7 @@ def save_error_dists(pix_errors, output_dir: str):
     # residuals = np.vstack((residuals_u, residuals_v)).T
 
     pck = 100.0 * (np.sum(distances <= (ratio * pck_threshold)) / len(distances))
+    data_ops.save_pickle(os.path.join(output_dir, "reprojection.pickle"), {"error": distances, "pck": pck})
 
     # plot the error histogram
     xlabel = "Error [px]"
@@ -267,7 +285,7 @@ def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_
     app.plot_cheetah_reconstruction(fte_file,
                                     scene_fname=scene_fpath,
                                     reprojections=plot_reprojections,
-                                    dark_mode=True,
+                                    dark_mode=False,
                                     centered=centered)
 
 
@@ -605,6 +623,7 @@ def run(root_dir: str,
         # Pairwise correspondence data.
         h5_filename = os.path.basename(path)
         pw_data[cam_idx] = data_ops.load_pickle(
+            # os.path.join(dlc_dir + "_pw", f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
             os.path.join(dlc_dir, f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
         cam_idx += 1
 
@@ -671,8 +690,17 @@ def run(root_dir: str,
         likelihoods = values["pose"][2::3]
         if w < 2:
             base = index_dict[marker]
+            # n_mask = points_2d_df['frame'] == n + start_frame - 1
+            # l_mask = points_2d_df['marker'] == markers[l - 1]
+            # c_mask = points_2d_df['camera'] == c - 1
+            # val = points_2d_df[n_mask & l_mask & c_mask]
+            # likelihood = val['likelihood'].values[0]
+            # return (likelihood > dlc_thresh) / R_pw[w - 1][l - 1]  # branchless
         else:
-            base = pair_dict[marker][w - 2]
+            try:
+                base = pair_dict[marker][w - 2]
+            except IndexError:
+                return 0.0
 
         # Filter measurements based on manual dropping.
         if (n - 1 + start_frame) in drop_out_frames and base in filtered_marker_indices:
@@ -697,10 +725,20 @@ def run(root_dir: str,
         if w < 2:
             base = index_dict[marker]
             return val[base]
+            # get measurements from df
+            # n_mask = points_2d_df['frame'] == n + start_frame - 1
+            # l_mask = points_2d_df['marker'] == markers[l - 1]
+            # c_mask = points_2d_df['camera'] == c - 1
+            # d_idx = {1: 'x', 2: 'y'}
+            # val = points_2d_df[n_mask & l_mask & c_mask]
+            # return val[d_idx[d2]].values[0]
         else:
-            base = pair_dict[marker][w - 2]
-            val_pw = values["pws"][:, :, :, d2 - 1]
-            return val[base] + val_pw[0, base, index_dict[marker]]
+            try:
+                base = pair_dict[marker][w - 2]
+                val_pw = values["pws"][:, :, :, d2 - 1]
+                return val[base] + val_pw[0, base, index_dict[marker]]
+            except IndexError:
+                return 0.0
 
     m.meas = pyo.Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_measurements)
 

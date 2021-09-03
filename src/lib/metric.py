@@ -50,3 +50,48 @@ def residual_error(points_2d_df, points_3d_dfs, markers, camera_params) -> Dict:
             columns=['frame', 'marker', 'camera_distance', 'pixel_residual', 'error_u', 'error_v'])
 
     return error
+
+
+def residual_error_3d(points_3d_GT, points_3d, markers):
+    error_dfs = []
+    for m in markers:
+        # extract frames
+        q = f'marker == "{m}"'
+        pts_3d = points_3d.query(q)
+        gt_pts_3d = points_3d_GT.query(q)
+        pts_3d = pts_3d[pts_3d[['x', 'y', 'z']].notnull().all(axis=1)]
+        gt_pts_3d = gt_pts_3d[gt_pts_3d[['x', 'y', 'z']].notnull().all(axis=1)]
+        valid_frames = np.intersect1d(gt_pts_3d['frame'].to_numpy(), pts_3d['frame'].to_numpy())
+        gt_pts_3d = gt_pts_3d[gt_pts_3d['frame'].isin(valid_frames)].sort_values(by=['frame'])
+        pts_3d = pts_3d[pts_3d['frame'].isin(valid_frames)].sort_values(by=['frame'])
+
+        # get 2d and reprojected points
+        frames = gt_pts_3d['frame'].to_numpy()
+        gt_pts = gt_pts_3d[['x', 'y', 'z']].to_numpy()
+        pts = pts_3d[['x', 'y', 'z']].to_numpy()
+        if len(gt_pts) == 0 or len(pts) == 0:
+            continue
+
+        # compare both types of points
+        position_error = np.sqrt(np.sum((gt_pts - pts)**2, axis=1)) * 1000.0
+        # position_error.shape
+        # residual = gt_pts - pts
+
+        # make the result dataframe
+        marker_arr = np.array([m] * len(frames))
+        error_dfs.append(
+            pd.DataFrame(np.vstack((frames, marker_arr, position_error)).T,
+                         columns=['frame', 'marker', 'position_error_mm']).astype({
+                             "frame": "int64",
+                             "marker": "str",
+                             "position_error_mm": "float64",
+                         }))
+
+    error = pd.concat(error_dfs, ignore_index=True) if len(error_dfs) > 0 else pd.DataFrame(
+        columns=['frame', 'marker', 'position_error_mm']).astype({
+            "frame": "int64",
+            "marker": "str",
+            "position_error_mm": "float64",
+        })
+
+    return error
