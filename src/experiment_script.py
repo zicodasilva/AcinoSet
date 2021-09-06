@@ -11,13 +11,13 @@ plt.style.use(os.path.join("../configs", "mplstyle.yaml"))
 if __name__ == "__main__":
     root_dir = os.path.join(
         "/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos")
-    root_results_dir = "/Users/zico/msc/data/PairwiseExperimentResults3"
-    burst_lengths = (1, 5, 10, 15)
+    root_results_dir = "/Users/zico/msc/data/PairwiseExperimentResults5"
+    burst_lengths = (1, 5, 10, 15, 20)
     num_drop_outs = (0, 25, 50, 75, 90)
-    drop_out_range = (20, 100)
-    data_path = os.path.join("2017_08_29", "top", "jules", "run1_1")
-    start_frame = 10
-    end_frame = 110
+    drop_out_range = (65, 155)
+    data_path = os.path.join("2019_03_09", "jules", "flick1")
+    start_frame = 60
+    end_frame = 160
     dlc_thresh = 0.5
 
     tests = ("Normal", "Pairwise")

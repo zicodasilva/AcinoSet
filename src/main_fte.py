@@ -24,7 +24,7 @@ from sklearn import preprocessing
 
 import matplotlib.pyplot as plt
 
-plt.style.use(os.path.join("../configs", "mplstyle.yaml"))
+plt.style.use(os.path.join("../configs", "mechatronics_style.yaml"))
 
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
@@ -45,7 +45,7 @@ def metrics(
         out_dir = os.path.join(root_dir, data_path, "fte_pw")
     # load DLC data
     data_dir = os.path.join(root_dir, data_path)
-    dlc_dir = os.path.join(data_dir, "dlc_pw")
+    dlc_dir = os.path.join(data_dir, "dlc")
     assert os.path.exists(dlc_dir)
 
     try:
@@ -68,7 +68,7 @@ def metrics(
     gt_points_3d_df = None
     try:
         points_2d_df = pd.read_csv(os.path.join("/Users/zico/msc/data/gt_labels", gt_data, f"{gt_data}.csv"))
-        gt_points_3d_df = pd.read_csv(os.path.join("/Users/zico/msc/data/gt_labels", gt_data, f"{gt_data}_3D.csv"))
+        # gt_points_3d_df = pd.read_csv(os.path.join("/Users/zico/msc/data/gt_labels", gt_data, f"{gt_data}_3D.csv"))
     except FileNotFoundError:
         logger.warning("No ground truth labels for this test.")
         points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
@@ -137,18 +137,21 @@ def metrics(
     return error_df, meas_stats_df
 
 
-def save_error_dists(pix_errors, output_dir: str):
+def save_error_dists(px_errors, output_dir: str):
     # Calculated PCK threshold from the training dataset average nose to eye(s) length.
-    pck_threshold = 15.3686
+    # pck_threshold = 15.3686
     ratio = 0.5
     distances = []
+    pck_threshold = []
     # residuals_u = []
     # residuals_v = []
-    for k, df in pix_errors.items():
+    for k, df in px_errors.items():
         distances += df["pixel_residual"].tolist()
+        pck_threshold += df["pck_threshold"].tolist()
         # residuals_u += df["error_u"].tolist()
         # residuals_v += df["error_v"].tolist()
     distances = np.asarray(list(map(float, distances)))
+    pck_threshold = np.asarray(list(map(float, pck_threshold)))
     # residuals_u = list(map(float, residuals_u))
     # residuals_v = list(map(float, residuals_v))
     # residuals = np.vstack((residuals_u, residuals_v)).T
@@ -172,7 +175,7 @@ def save_error_dists(pix_errors, output_dir: str):
 
     hist_data = []
     labels = []
-    for k, df in pix_errors.items():
+    for k, df in px_errors.items():
         i = int(k)
         e = df["pixel_residual"].tolist()
         e = list(map(float, e))
@@ -385,7 +388,7 @@ def run(root_dir: str,
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
-    dlc_dir = os.path.join(data_dir, "dlc_pw")
+    dlc_dir = os.path.join(data_dir, "dlc")
     assert os.path.exists(dlc_dir)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -618,13 +621,15 @@ def run(root_dir: str,
 
     # Obtain base and pairwise measurments.
     pw_data = {}
+    base_data = {}
     cam_idx = 0
     for path in df_paths:
         # Pairwise correspondence data.
         h5_filename = os.path.basename(path)
         pw_data[cam_idx] = data_ops.load_pickle(
-            # os.path.join(dlc_dir + "_pw", f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
-            os.path.join(dlc_dir, f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
+            os.path.join(dlc_dir + "_pw", f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
+        df_temp = pd.read_hdf(os.path.join(dlc_dir, h5_filename))
+        base_data[cam_idx] = list(df_temp.to_numpy())
         cam_idx += 1
 
     # There has been a case where some camera view points have less frames than others.
@@ -690,12 +695,15 @@ def run(root_dir: str,
         likelihoods = values["pose"][2::3]
         if w < 2:
             base = index_dict[marker]
+            likelihoods = base_data[cam_idx][(n - 1) + start_frame][2::3]
+
             # n_mask = points_2d_df['frame'] == n + start_frame - 1
             # l_mask = points_2d_df['marker'] == markers[l - 1]
             # c_mask = points_2d_df['camera'] == c - 1
             # val = points_2d_df[n_mask & l_mask & c_mask]
             # likelihood = val['likelihood'].values[0]
             # return (likelihood > dlc_thresh) / R_pw[w - 1][l - 1]  # branchless
+            return 1 / R_pw[w - 1][l - 1] if likelihoods[base] > dlc_thresh else 0.0
         else:
             try:
                 base = pair_dict[marker][w - 2]
@@ -724,6 +732,7 @@ def run(root_dir: str,
         marker = markers[l - 1]
         if w < 2:
             base = index_dict[marker]
+            val = base_data[cam_idx][(n - 1) + start_frame][d2 - 1::3]
             return val[base]
             # get measurements from df
             # n_mask = points_2d_df['frame'] == n + start_frame - 1
@@ -859,9 +868,9 @@ def run(root_dir: str,
         else:
             tau = 0.0
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
-        x = m.poses[n, l, pyo_i(idx["x_0"])] + m.dx[n, pyo_i(idx["x_0"])] * tau
-        y = m.poses[n, l, pyo_i(idx["y_0"])] + m.dx[n, pyo_i(idx["y_0"])] * tau
-        z = m.poses[n, l, pyo_i(idx["z_0"])] + m.dx[n, pyo_i(idx["z_0"])] * tau
+        x = m.poses[n, l, pyo_i(idx["x_0"])] + m.dx[n, pyo_i(idx["x_0"])] * tau + m.ddx[n, pyo_i(idx["x_0"])] * (tau**2)
+        y = m.poses[n, l, pyo_i(idx["y_0"])] + m.dx[n, pyo_i(idx["y_0"])] * tau + m.ddx[n, pyo_i(idx["y_0"])] * (tau**2)
+        z = m.poses[n, l, pyo_i(idx["z_0"])] + m.dx[n, pyo_i(idx["z_0"])] * tau + m.ddx[n, pyo_i(idx["z_0"])] * (tau**2)
 
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
 
