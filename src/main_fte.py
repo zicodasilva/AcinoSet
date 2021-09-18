@@ -696,14 +696,6 @@ def run(root_dir: str,
         if w < 2:
             base = index_dict[marker]
             likelihoods = base_data[cam_idx][(n - 1) + start_frame][2::3]
-
-            # n_mask = points_2d_df['frame'] == n + start_frame - 1
-            # l_mask = points_2d_df['marker'] == markers[l - 1]
-            # c_mask = points_2d_df['camera'] == c - 1
-            # val = points_2d_df[n_mask & l_mask & c_mask]
-            # likelihood = val['likelihood'].values[0]
-            # return (likelihood > dlc_thresh) / R_pw[w - 1][l - 1]  # branchless
-            return 1 / R_pw[w - 1][l - 1] if likelihoods[base] > dlc_thresh else 0.0
         else:
             try:
                 base = pair_dict[marker][w - 2]
@@ -727,22 +719,17 @@ def run(root_dir: str,
     def init_measurements(m, n, c, l, d2, w):
         # Determine if the current measurement is the base prediction or a pairwise prediction.
         cam_idx = single_view - 1 if single_view > 0 else c - 1
-        values = pw_data[cam_idx][(n - 1) + start_frame]
-        val = values["pose"][d2 - 1::3]
+        # val = values["pose"][d2 - 1::3]
         marker = markers[l - 1]
         if w < 2:
             base = index_dict[marker]
             val = base_data[cam_idx][(n - 1) + start_frame][d2 - 1::3]
+
             return val[base]
-            # get measurements from df
-            # n_mask = points_2d_df['frame'] == n + start_frame - 1
-            # l_mask = points_2d_df['marker'] == markers[l - 1]
-            # c_mask = points_2d_df['camera'] == c - 1
-            # d_idx = {1: 'x', 2: 'y'}
-            # val = points_2d_df[n_mask & l_mask & c_mask]
-            # return val[d_idx[d2]].values[0]
         else:
             try:
+                values = pw_data[cam_idx][(n - 1) + start_frame]
+                val = values["pose"][d2 - 1::3]
                 base = pair_dict[marker][w - 2]
                 val_pw = values["pws"][:, :, :, d2 - 1]
                 return val[base] + val_pw[0, base, index_dict[marker]]
@@ -1113,10 +1100,12 @@ def run_subset_tests(out_dir_prefix: str, loss: str):
 
 if __name__ == "__main__":
     import gc
-    working_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
-    video_data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
+    # working_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
+    working_dir = os.path.join(
+        "/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos")
+    video_data = data_ops.load_pickle("../data/test_videos_list.pickle")
     tests = video_data["test_dirs"]
-    dir_prefix = "/data/zico/CheetahResults/paws-included"
+    dir_prefix = "../data/sd-results"
     manually_selected_frames = {
         "2019_03_03/phantom/run": (73, 272),
         "2017_12_12/top/cetane/run1_1": (100, 241),
@@ -1153,8 +1142,13 @@ if __name__ == "__main__":
         "2017_12_12/bottom/big_girl/flick2": (30, 100),
         "2019_03_03/phantom/flick": (270, 460),
         "2019_03_09/lily/flick": (10, 100),
-        "2019_03_09/jules/flick2": (40, 185),
-        "2017_09_03/top/zorro/flick1_1": (62, 150)
+        "2019_03_09/jules/flick2": (80, 185),
+        "2017_09_03/top/zorro/flick1_1": (62, 150),
+        "2017_12_21/top/lily/flick1": (40, 180),
+        "2017_12_21/bottom/jules/flick2_1": (50, 200),
+        "2017_09_03/top/phantom/flick1": (100, 240),
+        "2017_09_02/top/jules/flick1_1": (60, 200),
+        "2017_08_29/top/phantom/flick1_1": (50, 200)
     }
     # manually_selected_frames = {
     #     "2017_08_29/top/phantom/run1_1": (20, 170),
@@ -1167,16 +1161,23 @@ if __name__ == "__main__":
     #     "2017_12_12/bottom/big_girl/flick2": (30, 100),
     #     "2019_03_03/phantom/flick": (270, 460),
     # }
-    valid_vids = ("2019_03_09/lily/flick", "2019_03_09/jules/flick2", "2017_09_03/top/zorro/flick1_1",
-                  "2017_12_21/top/lily/flick1", "2017_12_21/bottom/jules/flick2_1",
-                  "2017_12_16/bottom/phantom/flick2_1", "2017_12_16/bottom/phantom/flick2_2"
-                  "2017_09_03/top/phantom/flick1", "2017_09_02/top/jules/flick1_1", "2017_08_29/top/phantom/flick1_1")
+    valid_vids = (
+        # "2019_03_09/lily/flick",
+        # "2019_03_09/jules/flick2",
+        "2017_09_03/top/zorro/flick1_1",
+        "2017_12_21/top/lily/flick1",
+        "2017_12_21/bottom/jules/flick2_1",
+        #   "2017_12_16/bottom/phantom/flick2_1", "2017_12_16/bottom/phantom/flick2_2"
+        # "2017_09_03/top/phantom/flick1",
+        # "2017_09_02/top/jules/flick1_1",
+        "2017_08_29/top/phantom/flick1_1")
     bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1", "2017_12_17/top/zorro/flick1")
     if platform.python_implementation() == "PyPy":
         time0 = time()
         logger.info("Run reconstruction on all videos...")
         # Initialise the Ipopt solver.
-        optimiser = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
+        # optimiser = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
+        optimiser = SolverFactory("ipopt")
         # solver options
         optimiser.options["print_level"] = 5
         optimiser.options["max_iter"] = 400
@@ -1208,6 +1209,7 @@ if __name__ == "__main__":
                     start_frame=start,
                     end_frame=end,
                     dlc_thresh=0.5,
+                    enable_shutter_delay=True,
                     pairwise_included=0,
                     opt=optimiser,
                     out_dir_prefix=dir_prefix)
@@ -1217,6 +1219,7 @@ if __name__ == "__main__":
                     start_frame=-1,
                     end_frame=1,
                     dlc_thresh=0.5,
+                    enable_shutter_delay=True,
                     pairwise_included=0,
                     opt=optimiser,
                     out_dir_prefix=dir_prefix)

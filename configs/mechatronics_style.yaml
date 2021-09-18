@@ -8,7 +8,7 @@ legend.fancybox: true
 
 axes.prop_cycle: cycler('color', ['008fd5', 'fc4f30', 'e5ae38', '6d904f', '8b8b8b', '810f7c'])
 axes.facecolor: xkcd:white  # f0f0f0
-axes.labelsize: x-small
+axes.labelsize: medium
 axes.axisbelow: true
 axes.grid: true
 axes.edgecolor: xkcd:white  # f0f0f0
@@ -46,8 +46,8 @@ font.serif: Times New Roman
 mathtext.fontset: dejavuserif
 figure.autolayout : true
 # figure.figsize: 3.5, 3.5
-xtick.labelsize: x-small
-ytick.labelsize: x-small
+xtick.labelsize: small
+ytick.labelsize: small
 axes.spines.top: false
 axes.spines.bottom: false
 axes.spines.left: false
