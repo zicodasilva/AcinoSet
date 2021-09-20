@@ -25,27 +25,22 @@ from sklearn import preprocessing
 logger = log.logger(__name__)
 
 
-def train_motion_model(window_size: int) -> Tuple[Pipeline, np.ndarray]:
+def train_motion_model(n: int, window_size: int, window_time: int) -> Tuple[Pipeline, np.ndarray]:
     logger.info("Train motion prediction model")
-    model_dir = "/Users/zico/msc/data/CheetahRuns/v2/model"
+    model_dir = "/Users/zico/msc/data/CheetahRuns/v4/model"
     p_idx = misc.get_pose_params()
     pose_states = p_idx.keys()
     num_vars = len(pose_states)
-    df = pd.read_hdf(os.path.join(model_dir, "dataset.h5"))
-    df_input = data_ops.series_to_supervised(df, window_size)
+    df = pd.read_hdf(os.path.join(model_dir, "dataset_runs.h5"))
+    df_input = data_ops.series_to_supervised(df.iloc[:, num_vars:num_vars + n], n_in=window_size, n_step=window_time)
     # Modify the dataframe to discard the window size at the start of separate trajectory.
-    del_indices = [i for i in range(window_size)]
+    del_indices = [i for i in range(window_size * window_time)]
     df_input.drop(index=del_indices, inplace=True)
-
-    # pipeline = Pipeline(steps=[("normalize",
-    #                             preprocessing.MinMaxScaler()), ("pca",
-    #                                                             PCA(n_components=n_comps)), ("model",
-    #                                                                                          LinearRegression())])
     pipeline = Pipeline(steps=[("model", LinearRegression())])
     xy_set = df_input.to_numpy()
-    X = xy_set[:, 0:(num_vars * window_size)]
-    y = xy_set[:, (num_vars * window_size):]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+    X = xy_set[:, 0:(n * window_size)]
+    y = xy_set[:, (n * window_size):]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
     logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
     logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
     pipeline.fit(X_train, y_train)
@@ -468,11 +463,14 @@ def run(root_dir: str,
         N = end_frame - start_frame
 
     # Train motion model and make predictions with a predefined window size.
-    window_size = 2
-    num_vars = len(idx.keys())
+    window_size = 3
+    window_time = 1
+    start_pred = window_time * window_size
+    num_vars = 6
     pipeline = None
     if single_view > 0:
-        pipeline, pred_var = train_motion_model(window_size)
+        pipeline, pred_var = train_motion_model(num_vars, window_size, window_time)
+    pred_var = [4, 1, 0.5, 1.5, 0.5, 1.5]
     logger.info("Prepare data - End")
 
     # save parameters
@@ -503,7 +501,7 @@ def run(root_dir: str,
     m.D3 = pyo.RangeSet(3)
     # Number of pairwise terms to include + the base measurement.
     m.W = pyo.RangeSet(pairwise_included + 1 if pairwise_included <= 2 and pairwise_included >= 0 else 1)
-    m.NW = pyo.RangeSet(N - window_size)
+    m.NW = pyo.RangeSet(N - start_pred)
 
     index_dict = misc.get_dlc_marker_indices()
     pair_dict = misc.get_pairwise_graph()
@@ -527,7 +525,7 @@ def run(root_dir: str,
     m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
     if single_view > 0:
-        m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1])
+        m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1] if p <= num_vars else 0.0)
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, c, l, d2, w):
@@ -558,7 +556,7 @@ def run(root_dir: str,
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
     if single_view > 0:
-        m.x_prediction = pyo.Var(m.NW, m.P)
+        m.dx_prediction = pyo.Var(m.NW, m.P)
         m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
     else:
         m.shutter_delay = pyo.Var(m.C, initialize=0.0)
@@ -595,8 +593,8 @@ def run(root_dir: str,
                 m.dx[n, p].value = init_dx[-1, p - 1]
                 m.ddx[n, p].value = init_ddx[-1, p - 1]
             # Initialise motion prediction to the initial state.
-            if single_view > 0 and n > window_size:
-                m.x_prediction[n - window_size, p].value = pyo.value(m.x[n, p])
+            # if single_view > 0 and n > start_pred:
+            #     m.dx_prediction[n - start_pred, p].value = pyo.value(m.dx[n, p])
         #init pose
         var_list = [m.x[n, p].value for p in range(1, P + 1)]
         for l in m.L:
@@ -634,18 +632,18 @@ def run(root_dir: str,
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
 
     if single_view > 0 and pipeline is not None:
-        x_input = get_vals_v(m.x, [m.N, m.P])
-        df = data_ops.series_to_supervised(x_input, window_size)
+        dx_input = get_vals_v(m.dx, [m.N, m.P])
+        df = data_ops.series_to_supervised(dx_input[:, 0:num_vars], window_size)
         y_pred = pipeline.predict(df.to_numpy()[:, 0:(num_vars * window_size)])
 
         def pose_prediction(m, n, p):
-            return m.x_prediction[n, p] == y_pred[n - 1, p - 1]
+            return m.dx_prediction[n, p] == y_pred[n - 1, p - 1] if p <= num_vars else pyo.Constraint.Skip
 
         m.pose_prediction = pyo.Constraint(m.NW, m.P, rule=pose_prediction)
 
         def motion_constraints(m, n, p):
-            if n > window_size:
-                return m.x_prediction[n - window_size, p] - m.x[n, p] - m.slack_motion[n, p] == 0.0
+            if n > start_pred and p <= num_vars:
+                return m.dx_prediction[n - start_pred, p] - m.dx[n, p] - m.slack_motion[n, p] == 0.0
             else:
                 return pyo.Constraint.Skip
 
