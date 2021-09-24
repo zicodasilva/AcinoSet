@@ -25,34 +25,45 @@ from sklearn import preprocessing
 logger = log.logger(__name__)
 
 
-def train_motion_model(window_size: int) -> Tuple[Pipeline, np.ndarray]:
+def mat_mul(X: list, Y: list):
+    return [[sum(a * b for a, b in zip(X_row, Y_col)) for Y_col in zip(*Y)] for X_row in X]
+
+
+def predict_motion(X: list, B: list, C: list) -> list:
+    [y_pred] = mat_mul(X, B)
+
+    return [a + b for a, b in zip(y_pred, C)]
+
+
+def train_motion_model(num_vars: int, window_size: int, window_time: int) -> Tuple[Pipeline, np.ndarray]:
     logger.info("Train motion prediction model")
     model_dir = "/Users/zico/msc/data/CheetahRuns/v2/model"
-    p_idx = misc.get_pose_params()
-    pose_states = p_idx.keys()
-    num_vars = len(pose_states)
     df = pd.read_hdf(os.path.join(model_dir, "dataset.h5"))
-    df_input = data_ops.series_to_supervised(df, window_size)
+    df_input = data_ops.series_to_supervised(df, n_in=window_size, n_step=window_time)
     # Modify the dataframe to discard the window size at the start of separate trajectory.
-    del_indices = [i for i in range(window_size)]
+    del_indices = [i for i in range(window_size * window_time)]
     df_input.drop(index=del_indices, inplace=True)
 
-    # pipeline = Pipeline(steps=[("normalize",
-    #                             preprocessing.MinMaxScaler()), ("pca",
-    #                                                             PCA(n_components=n_comps)), ("model",
-    #                                                                                          LinearRegression())])
     pipeline = Pipeline(steps=[("model", LinearRegression())])
     xy_set = df_input.to_numpy()
     X = xy_set[:, 0:(num_vars * window_size)]
     y = xy_set[:, (num_vars * window_size):]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
     logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
     pipeline.fit(X_train, y_train)
-
+    B = pipeline["model"].coef_.T.tolist()
+    C = pipeline["model"].intercept_.tolist()
     y_pred = pipeline.predict(X_test)
-    residuals = y_test - y_pred
+
+    y_pred_manual = np.asarray([predict_motion([pose.tolist()], B, C) for pose in X_test])
+    check_motion_predict = (y_pred - y_pred_manual)**2
+    if np.sum(check_motion_predict) < 1e-15:
+        logger.info("Pure Python LR prediction matches sklearn :)")
+
+    residuals = y_test - y_pred_manual
     variance = np.var(residuals, axis=0)
+    logger.info(f"Model prediction error: {np.mean(np.sqrt(np.sum(residuals**2, axis=0)))}")
 
     return pipeline, np.asarray(variance)
 
@@ -469,12 +480,17 @@ def run(root_dir: str,
 
     # Train motion model and make predictions with a predefined window size.
     window_size = 2
+    window_time = 1
+    window_buf = window_size * window_time
     num_vars = len(idx.keys())
-    pipeline = None
+    coefficients = []
+    intercept = []
     if single_view > 0:
-        pipeline, pred_var = train_motion_model(window_size)
-    logger.info("Prepare data - End")
+        pipeline, pred_var = train_motion_model(num_vars, window_size, window_time)
+        coefficients = pipeline["model"].coef_.T.tolist()
+        intercept = pipeline["model"].intercept_.tolist()
 
+    logger.info("Prepare data - End")
     # save parameters
     with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
         json.dump(dict(start_frame=start_frame, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
@@ -503,7 +519,6 @@ def run(root_dir: str,
     m.D3 = pyo.RangeSet(3)
     # Number of pairwise terms to include + the base measurement.
     m.W = pyo.RangeSet(pairwise_included + 1 if pairwise_included <= 2 and pairwise_included >= 0 else 1)
-    m.NW = pyo.RangeSet(N - window_size)
 
     index_dict = misc.get_dlc_marker_indices()
     pair_dict = misc.get_pairwise_graph()
@@ -558,7 +573,6 @@ def run(root_dir: str,
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
     if single_view > 0:
-        m.x_prediction = pyo.Var(m.NW, m.P)
         m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
     else:
         m.shutter_delay = pyo.Var(m.C, initialize=0.0)
@@ -594,9 +608,6 @@ def run(root_dir: str,
                 m.x[n, p].value = init_x[-1, p - 1]
                 m.dx[n, p].value = init_dx[-1, p - 1]
                 m.ddx[n, p].value = init_ddx[-1, p - 1]
-            # Initialise motion prediction to the initial state.
-            if single_view > 0 and n > window_size:
-                m.x_prediction[n - window_size, p].value = pyo.value(m.x[n, p])
         #init pose
         var_list = [m.x[n, p].value for p in range(1, P + 1)]
         for l in m.L:
@@ -633,23 +644,18 @@ def run(root_dir: str,
 
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
 
-    if single_view > 0 and pipeline is not None:
-        x_input = get_vals_v(m.x, [m.N, m.P])
-        df = data_ops.series_to_supervised(x_input, window_size)
-        y_pred = pipeline.predict(df.to_numpy()[:, 0:(num_vars * window_size)])
+    if single_view > 0:
 
-        def pose_prediction(m, n, p):
-            return m.x_prediction[n, p] == y_pred[n - 1, p - 1]
-
-        m.pose_prediction = pyo.Constraint(m.NW, m.P, rule=pose_prediction)
-
-        def motion_constraints(m, n, p):
-            if n > window_size:
-                return m.x_prediction[n - window_size, p] - m.x[n, p] - m.slack_motion[n, p] == 0.0
+        def motion_constraint(m, n, p):
+            if n > window_buf:
+                # Pred using LR model
+                X = [[m.x[n - w * window_time, i] for i in range(1, P + 1)] for w in range(window_size, 0, -1)]
+                X = sum(X, [])
+                return predict_motion([X], coefficients, intercept)[p - 1] - m.x[n, p] - m.slack_motion[n, p] == 0.0
             else:
                 return pyo.Constraint.Skip
 
-        m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
+        m.motion_constraint = pyo.Constraint(m.N, m.P, rule=motion_constraint)
     else:
         m.shutter_base_constraint = pyo.Constraint(rule=lambda m: m.shutter_delay[1] == 0.0)
         m.shutter_delay_constraint = pyo.Constraint(m.C, rule=lambda m, c: (-m.Ts, m.shutter_delay[c], m.Ts))
@@ -743,7 +749,6 @@ def run(root_dir: str,
                 for p in m.P:
                     slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
                     slack_motion_err += m.motion_err_weight[p] * m.slack_motion[n, p]**2
-                    # slack_motion_err += (1 / 0.1 * m.slack_motion[n, p])**2
                 #Measurement Error
                 for l in m.L:
                     for c in m.C:
