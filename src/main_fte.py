@@ -35,19 +35,24 @@ def predict_motion(X: list, B: list, C: list) -> list:
     return [a + b for a, b in zip(y_pred, C)]
 
 
-def train_motion_model(num_vars: int, window_size: int, window_time: int) -> Tuple[Pipeline, np.ndarray]:
+def train_motion_model(n: int, num_vars: int, window_size: int, window_time: int) -> Tuple[Pipeline, np.ndarray]:
     logger.info("Train motion prediction model")
-    model_dir = "/Users/zico/msc/data/CheetahRuns/v2/model"
-    df = pd.read_hdf(os.path.join(model_dir, "dataset.h5"))
-    df_input = data_ops.series_to_supervised(df, n_in=window_size, n_step=window_time)
-    # Modify the dataframe to discard the window size at the start of separate trajectory.
-    del_indices = [i for i in range(window_size * window_time)]
-    df_input.drop(index=del_indices, inplace=True)
+    model_dir = "/Users/zico/msc/data/CheetahRuns/v4/model"
+    df = pd.read_hdf(os.path.join(model_dir, "dataset_steady_state_runs.h5"))
+    idx = np.where(df.index.values == 0)[0]
+    df_in = df.iloc[:, num_vars:num_vars + n]
+    df_list = []
+    end_segment = 0
+    for begin_segment, end_segment in zip(idx, idx[1:]):
+        df_list.append(
+            data_ops.series_to_supervised(df_in.iloc[begin_segment:end_segment], n_in=window_size, n_step=window_time))
+    df_list.append(data_ops.series_to_supervised(df_in.iloc[end_segment:], n_in=window_size, n_step=window_time))
+    df_input = pd.concat(df_list)
 
     pipeline = Pipeline(steps=[("model", LinearRegression())])
     xy_set = df_input.to_numpy()
-    X = xy_set[:, 0:(num_vars * window_size)]
-    y = xy_set[:, (num_vars * window_size):]
+    X = xy_set[:, 0:(n * window_size)]
+    y = xy_set[:, (n * window_size):]
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
     logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
@@ -479,14 +484,14 @@ def run(root_dir: str,
         N = end_frame - start_frame
 
     # Train motion model and make predictions with a predefined window size.
-    window_size = 2
-    window_time = 1
+    window_size = 3
+    window_time = 2
     window_buf = window_size * window_time
-    num_vars = len(idx.keys())
+    num_vars = 6
     coefficients = []
     intercept = []
     if single_view > 0:
-        pipeline, pred_var = train_motion_model(num_vars, window_size, window_time)
+        pipeline, pred_var = train_motion_model(num_vars, len(idx.keys()), window_size, window_time)
         coefficients = pipeline["model"].coef_.T.tolist()
         intercept = pipeline["model"].intercept_.tolist()
 
@@ -542,7 +547,7 @@ def run(root_dir: str,
     m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
     if single_view > 0:
-        m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1])
+        m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1] if p <= num_vars else 0.0)
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, c, l, d2, w):
@@ -647,11 +652,11 @@ def run(root_dir: str,
     if single_view > 0:
 
         def motion_constraint(m, n, p):
-            if n > window_buf:
+            if n > window_buf and p <= num_vars:
                 # Pred using LR model
-                X = [[m.x[n - w * window_time, i] for i in range(1, P + 1)] for w in range(window_size, 0, -1)]
+                X = [[m.dx[n - w * window_time, i] for i in range(1, num_vars + 1)] for w in range(window_size, 0, -1)]
                 X = sum(X, [])
-                return predict_motion([X], coefficients, intercept)[p - 1] - m.x[n, p] - m.slack_motion[n, p] == 0.0
+                return predict_motion([X], coefficients, intercept)[p - 1] - m.dx[n, p] - m.slack_motion[n, p] == 0.0
             else:
                 return pyo.Constraint.Skip
 
