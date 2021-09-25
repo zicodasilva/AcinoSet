@@ -194,12 +194,12 @@ def plot_cheetah_states(states, smoothed_states=None, out_fpath=None, mplstyle_f
         print(f'Saved {out_fpath}\n')
 
 
-def _plot_cheetah_reconstruction(positions, data_dir, scene_fname=None, labels=None, v_vec=None, **kwargs):
+def _plot_cheetah_reconstruction(positions, data_dir, scene_fname=None, labels=None, **kwargs):
     from .plotting import Cheetah
 
     positions = np.array(positions)
     *_, scene_fpath = find_scene_file(data_dir, scene_fname, verbose=False)
-    ca = Cheetah(positions, scene_fpath, labels, project_points_fisheye, v_vec, **kwargs)
+    ca = Cheetah(positions, scene_fpath, labels, project_points_fisheye, **kwargs)
     ca.animation()
 
 
@@ -208,22 +208,19 @@ def plot_cheetah_reconstruction(data_fpath, scene_fname=None, **kwargs):
     with open(data_fpath, 'rb') as f:
         data = pickle.load(f)
     positions = data['smoothed_positions'] if 'EKF' in label else data['positions']
-    v_vec = data["velocity_vector"]
-    _plot_cheetah_reconstruction([positions], os.path.dirname(data_fpath), scene_fname, labels=[label], v_vec=[v_vec], **kwargs)
+    _plot_cheetah_reconstruction([positions], os.path.dirname(data_fpath), scene_fname, labels=[label], **kwargs)
 
 
 def plot_multiple_cheetah_reconstructions(data_fpaths, scene_fname=None, **kwargs):
     positions = []
     labels = []
-    v_vec = []
     for data_fpath in data_fpaths:
         label = os.path.basename(os.path.splitext(data_fpath)[0]).upper()
         with open(data_fpath, 'rb') as f:
             data = pickle.load(f)
         positions.append(data['smoothed_positions'] if 'EKF' in label else data['positions'])
-        v_vec.append(data["velocity_vector"])
         labels.append(label)
-    _plot_cheetah_reconstruction(positions, os.path.dirname(data_fpath), scene_fname, labels, v_vec=v_vec,  **kwargs)
+    _plot_cheetah_reconstruction(positions, os.path.dirname(data_fpath), scene_fname, labels,  **kwargs)
 
 
 # ==========  SAVE FUNCS  ==========
