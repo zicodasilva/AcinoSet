@@ -1,5 +1,6 @@
 import sys
 import numpy as np
+import pandas as pd
 import sympy as sp
 
 
@@ -346,6 +347,58 @@ def rot_z(z):
         s = np.sin(z)
         func = np.array
     return func([[c, s, 0], [-s, c, 0], [0, 0, 1]])
+
+
+class PoseReduction:
+    def __init__(self, dataset_fname: str, num_vars: int, ext_dim: int, n_comps: int):
+        df = pd.read_hdf(dataset_fname)
+        self.num_vars = num_vars
+        self.ext_dim = ext_dim
+        X = df.iloc[:, self.ext_dim:self.num_vars].to_numpy()
+        self.mean = X.mean(axis=0)
+        X0 = X - self.mean
+        U, s, VT = np.linalg.svd(X0, full_matrices=False)
+
+        # Calcuate the explained variance and determine the covariance matrix from singular values.
+        eig_values = s**2
+        variance_explained = np.cumsum(eig_values) / np.sum(eig_values)
+
+        self.S = np.diag(s)
+        # COV = S @ S
+
+        # Obtain the principal axes (i.e. new basis vectors) and place in a projection matrix.
+        self.P = VT[:n_comps, :]
+
+        # Get prinical components of dataset.
+        self.PC = U[:, :n_comps] * s[:n_comps]
+        X1 = self.PC.dot(self.P) + self.mean
+
+        X_orig = df.iloc[:, :self.num_vars].to_numpy()
+        reconstructed_states = np.concatenate((X_orig[:, :self.ext_dim], X1), axis=1)
+        positions_orig = np.array([get_3d_marker_coords(pose) for pose in X_orig])
+        positions_pca = np.array([get_3d_marker_coords(pose) for pose in reconstructed_states])
+        position_diff = (positions_orig - positions_pca)
+        mpjpe_mm = np.mean(np.sqrt(np.sum(position_diff**2, axis=2)), axis=0) * 1000.0
+        print(
+            f"PCA trained for {n_comps} components ({np.round(100.0 * variance_explained[n_comps - 1], 2)}%) with reconstruction error [mm]: {mpjpe_mm.mean(axis=0).round(4)}"
+        )
+
+    def project(self, X: np.ndarray, full_state: bool = True, inverse: bool = False) -> np.ndarray:
+        if full_state:
+            X_full = X.copy()
+            if len(X.shape) > 1: X = X[:, self.ext_dim:]
+            else: X = X[self.ext_dim:]
+            if inverse: return self.get_full_pose(X_full, np.dot(X, self.P) + self.mean)
+            return self.get_full_pose(X_full, np.dot(X - self.mean, self.P.T))
+
+        if inverse: return np.dot(X, self.P) + self.mean
+        return np.dot(X - self.mean, self.P.T)
+
+    def get_full_pose(self, X: np.ndarray, X_reduced: np.ndarray) -> np.ndarray:
+        if len(X.shape) > 1:
+            return np.concatenate((X[:, :self.ext_dim], X_reduced), axis=1)
+        else:
+            return np.concatenate((X[:self.ext_dim], X_reduced), axis=0)
 
 
 # https://stackoverflow.com/questions/14906764/how-to-redirect-stdout-to-both-file-and-console-with-scripting
