@@ -355,8 +355,9 @@ class PoseReduction:
         self.num_vars = num_vars
         self.ext_dim = ext_dim
         X = df.iloc[:, self.ext_dim:self.num_vars].to_numpy()
+        self.std = X.std(axis=0)
         self.mean = X.mean(axis=0)
-        X0 = X - self.mean
+        X0 = (X - self.mean) / self.std
         U, s, VT = np.linalg.svd(X0, full_matrices=False)
 
         # Calcuate the explained variance and determine the covariance matrix from singular values.
@@ -371,7 +372,7 @@ class PoseReduction:
 
         # Get prinical components of dataset.
         self.PC = U[:, :n_comps] * s[:n_comps]
-        X1 = self.PC.dot(self.P) + self.mean
+        X1 = self.PC.dot(self.P) * self.std + self.mean
 
         X_orig = df.iloc[:, :self.num_vars].to_numpy()
         reconstructed_states = np.concatenate((X_orig[:, :self.ext_dim], X1), axis=1)
@@ -388,17 +389,20 @@ class PoseReduction:
             X_full = X.copy()
             if len(X.shape) > 1: X = X[:, self.ext_dim:]
             else: X = X[self.ext_dim:]
-            if inverse: return self.get_full_pose(X_full, np.dot(X, self.P) + self.mean)
-            return self.get_full_pose(X_full, np.dot(X - self.mean, self.P.T))
+            if inverse: return self.get_full_pose(X_full, np.dot(X, self.P) * self.std + self.mean)
+            return self.get_full_pose(X_full, np.dot((X - self.mean) / self.std, self.P.T))
 
-        if inverse: return np.dot(X, self.P) + self.mean
-        return np.dot(X - self.mean, self.P.T)
+        if inverse: return np.dot(X, self.P) * self.std + self.mean
+        return np.dot((X - self.mean) / self.std, self.P.T)
 
     def get_full_pose(self, X: np.ndarray, X_reduced: np.ndarray) -> np.ndarray:
         if len(X.shape) > 1:
             return np.concatenate((X[:, :self.ext_dim], X_reduced), axis=1)
         else:
             return np.concatenate((X[:self.ext_dim], X_reduced), axis=0)
+
+    def pc_std(self):
+        return np.std(self.PC, axis=0)
 
 
 # https://stackoverflow.com/questions/14906764/how-to-redirect-stdout-to-both-file-and-console-with-scripting

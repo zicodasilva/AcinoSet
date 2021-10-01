@@ -29,18 +29,26 @@ def mat_mul(X: list, Y: list):
     return [[sum(a * b for a, b in zip(X_row, Y_col)) for Y_col in zip(*Y)] for X_row in X]
 
 
-def predict_motion(X: list, B: list, C: list) -> list:
-    [y_pred] = mat_mul(X, B)
+def scale_motion(X: list, scale: list, translate: list) -> list:
+    # X *= self.scale_ X += self.min_
+    X_ = sum(X, [])
+    X_temp = [a * b for a, b in zip(X_, scale)]
+    return [a + b for a, b in zip(X_temp, translate)]
+
+
+def predict_motion(X: list, B: list, C: list, D: list = None, E: list = None) -> list:
+    if D and E: [y_pred] = mat_mul([scale_motion(X, D, E)], B)
+    else: [y_pred] = mat_mul(X, B)
 
     return [a + b for a, b in zip(y_pred, C)]
 
 
-def train_motion_model(n: int, num_vars: int, window_size: int, window_time: int) -> Tuple[Pipeline, np.ndarray]:
+def train_motion_model(n: int, start_idx: int, window_size: int, window_time: int) -> Tuple[Pipeline, np.ndarray]:
     logger.info("Train motion prediction model")
     model_dir = "/Users/zico/msc/data/CheetahRuns/v4/model"
-    df = pd.read_hdf(os.path.join(model_dir, "dataset_steady_state_runs.h5"))
+    df = pd.read_hdf(os.path.join(model_dir, "dataset_runs.h5"))
     idx = np.where(df.index.values == 0)[0]
-    df_in = df.iloc[:, num_vars:num_vars + n]
+    df_in = df.iloc[:, start_idx:start_idx + n]
     df_list = []
     end_segment = 0
     for begin_segment, end_segment in zip(idx, idx[1:]):
@@ -49,7 +57,7 @@ def train_motion_model(n: int, num_vars: int, window_size: int, window_time: int
     df_list.append(data_ops.series_to_supervised(df_in.iloc[end_segment:], n_in=window_size, n_step=window_time))
     df_input = pd.concat(df_list)
 
-    pipeline = Pipeline(steps=[("model", LinearRegression())])
+    pipeline = Pipeline(steps=[("norm", preprocessing.MinMaxScaler()), ("model", LinearRegression())])
     xy_set = df_input.to_numpy()
     X = xy_set[:, 0:(n * window_size)]
     y = xy_set[:, (n * window_size):]
@@ -59,16 +67,18 @@ def train_motion_model(n: int, num_vars: int, window_size: int, window_time: int
     pipeline.fit(X_train, y_train)
     B = pipeline["model"].coef_.T.tolist()
     C = pipeline["model"].intercept_.tolist()
+    D = pipeline["norm"].scale_.tolist()
+    E = pipeline["norm"].min_.tolist()
     y_pred = pipeline.predict(X_test)
 
-    y_pred_manual = np.asarray([predict_motion([pose.tolist()], B, C) for pose in X_test])
+    y_pred_manual = np.asarray([predict_motion([pose.tolist()], B, C, D, E) for pose in X_test])
     check_motion_predict = (y_pred - y_pred_manual)**2
     if np.sum(check_motion_predict) < 1e-15:
         logger.info("Pure Python LR prediction matches sklearn :)")
 
     residuals = y_test - y_pred_manual
     variance = np.var(residuals, axis=0)
-    logger.info(f"Model prediction error: {np.mean(np.sqrt(np.sum(residuals**2, axis=0)))}")
+    logger.info(f"Model prediction error: {np.mean(residuals**2)}")
 
     return pipeline, np.asarray(variance)
 
@@ -111,11 +121,16 @@ def compare_trajectories(fte_file1: str, fte_file2: str, scene_file: str, center
                                               centered=centered)
 
 
-def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_reprojections=False, centered=False):
-    fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
+def plot_cheetah(root_dir: str,
+                 data_dir: str,
+                 fte_type: str = "pw_sd_fte",
+                 out_dir_prefix: str = None,
+                 plot_reprojections=False,
+                 centered=False):
+    fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
-        fte_file = os.path.join(out_dir_prefix, data_dir, "fte_pw", "fte.pickle")
+        fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     app.plot_cheetah_reconstruction(fte_file,
                                     scene_fname=scene_fpath,
                                     reprojections=plot_reprojections,
@@ -126,13 +141,14 @@ def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_
 def compare_cheetahs(test_fte_file: str,
                      root_dir: str,
                      data_dir: str,
+                     fte_type: str = "pw_sd_fte",
                      out_dir_prefix: str = None,
                      plot_reprojections=False,
                      centered=False):
-    fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
+    fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
-        fte_file = os.path.join(out_dir_prefix, data_dir, "fte_pw", "fte.pickle")
+        fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file],
                                               scene_fname=scene_fpath,
                                               reprojections=plot_reprojections,
@@ -199,6 +215,7 @@ def run(root_dir: str,
         end_frame: int,
         dlc_thresh: float,
         loss="redescending",
+        n_comps: int = 9,
         pairwise_included: int = 0,
         init_fte=False,
         opt=None,
@@ -462,11 +479,10 @@ def run(root_dir: str,
     #                   Optimisation
     #===================================================
     logger.info("Setup optimisation - Start")
-    window_size = 3
-    window_time = 2
+    window_size = 1
+    window_time = 1
     window_buf = window_size * window_time
     ext_dim = 6
-    n_comps = 6
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts
     # ===== SETS =====
@@ -487,17 +503,17 @@ def run(root_dir: str,
     pair_dict = misc.get_pairwise_graph()
 
     # Instantiate the reduced pose model.
-    pose_model = misc.PoseReduction("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_steady_state_runs.h5",
+    pose_model = misc.PoseReduction("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_pose.h5",
                                     num_vars=P,
                                     ext_dim=ext_dim,
                                     n_comps=n_comps)
     Q_reduced = pose_model.project(Q)**2
     # Train motion model and make predictions with a predefined window size.
-    coefficients = []
-    intercept = []
     pipeline, pred_var = train_motion_model(ext_dim, P, window_size, window_time)
     coefficients = pipeline["model"].coef_.T.tolist()
     intercept = pipeline["model"].intercept_.tolist()
+    scale = pipeline["norm"].scale_.tolist()
+    translate = pipeline["norm"].min_.tolist()
 
     # ======= WEIGHTS =======
     def init_meas_weights(m, n, l, w):
@@ -521,7 +537,7 @@ def run(root_dir: str,
     m.meas_err_weight = pyo.Param(m.N, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P,
                                    initialize=lambda m, p: 1 / Q_reduced[p - 1] if Q_reduced[p - 1] != 0.0 else 0.0)
-    m.motion_err_weight = pyo.Param(m.E, initialize=lambda m, e: 1 / pred_var[e - 1])
+    m.motion_err_weight = pyo.Param(m.E, initialize=lambda m, e: 1 / pred_var[e - 1] if pred_var[e - 1] != 0 else 0.0)
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, l, d2, w):
@@ -560,8 +576,8 @@ def run(root_dir: str,
     init_ddx = np.zeros((N, P))
     if init_fte:
         state_indices = Q > 0
-        ekf_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "fte_pw", "fte.pickle"))
-        init_x[:, state_indices] = ekf_states["x"]
+        fte_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "sd_fte", "fte.pickle"))
+        init_x[:, state_indices] = fte_states["x"]
     else:
         init_x[:, idx["x_0"]] = x_est[start_frame:start_frame + N]  #x # change this to [start_frame: end_frame]?
         init_x[:, idx["y_0"]] = y_est[start_frame:start_frame + N]  #y
@@ -622,8 +638,8 @@ def run(root_dir: str,
         if n > window_buf:
             # Pred using LR model
             X = [[m.dx[n - w * window_time, i] for i in m.E] for w in range(window_size, 0, -1)]
-            X = sum(X, [])
-            return predict_motion([X], coefficients, intercept)[e - 1] - m.dx[n, e] - m.slack_motion[n, e] == 0.0
+            return predict_motion(X, coefficients, intercept, scale,
+                                  translate)[e - 1] - m.dx[n, e] - m.slack_motion[n, e] == 0.0
         else:
             return pyo.Constraint.Skip
 
@@ -645,62 +661,66 @@ def run(root_dir: str,
     # Head
     m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["phi_0"])], np.pi / 6))
     m.head_theta_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_0"])], np.pi / 6))
-    # Neck
-    # m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 2, m.x[n, pyo_i(idx["phi_1"])], np.pi / 2))
-    # m.neck_theta_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_1"])], np.pi / 6))
-    # m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["psi_1"])], np.pi / 6))
-    # # Front torso
-    # m.front_torso_theta_2 = pyo.Constraint(m.N,
-    #                                        rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_2"])], np.pi / 6))
-    # # Back torso
-    # m.back_torso_theta_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_3"])], np.pi / 6))
-    # m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["phi_3"])], np.pi / 6))
-    # m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["psi_3"])], np.pi / 6))
-    # # Tail base
-    # m.tail_base_theta_4 = pyo.Constraint(m.N,
-    #                                      rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_4"])],
-    #                                                         (2 / 3) * np.pi))
-    # m.tail_base_psi_4 = pyo.Constraint(m.N,
-    #                                    rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["psi_4"])],
-    #                                                       (2 / 3) * np.pi))
-    # # Tail mid
-    # m.tail_mid_theta_5 = pyo.Constraint(m.N,
-    #                                     rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_5"])],
-    #                                                        (2 / 3) * np.pi))
-    # m.tail_mid_psi_5 = pyo.Constraint(m.N,
-    #                                   rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["psi_5"])],
-    #                                                      (2 / 3) * np.pi))
-    # # Front left leg
-    # m.l_shoulder_theta_6 = pyo.Constraint(m.N,
-    #                                       rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_6"])],
-    #                                                          (3 / 4) * np.pi))
-    # m.l_front_knee_theta_7 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, pyo_i(idx["theta_7"])], 0))
-    # # Front right leg
-    # m.r_shoulder_theta_8 = pyo.Constraint(m.N,
-    #                                       rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_8"])],
-    #                                                          (3 / 4) * np.pi))
-    # m.r_front_knee_theta_9 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, pyo_i(idx["theta_9"])], 0))
-    # # Back left leg
-    # m.l_hip_theta_10 = pyo.Constraint(m.N,
-    #                                   rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_10"])],
-    #                                                      (3 / 4) * np.pi))
-    # m.l_back_knee_theta_11 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_11"])], np.pi))
-    # # Back right leg
-    # m.r_hip_theta_12 = pyo.Constraint(m.N,
-    #                                   rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_12"])],
-    #                                                      (3 / 4) * np.pi))
+    if n_comps == P - ext_dim:
+        # Neck
+        m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 2, m.x[n, pyo_i(idx["phi_1"])], np.pi / 2))
+        m.neck_theta_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_1"])], np.pi / 6))
+        m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["psi_1"])], np.pi / 6))
+        # Front torso
+        m.front_torso_theta_2 = pyo.Constraint(m.N,
+                                               rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_2"])], np.pi / 6))
+        # Back torso
+        m.back_torso_theta_3 = pyo.Constraint(m.N,
+                                              rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_3"])], np.pi / 6))
+        m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["phi_3"])], np.pi / 6))
+        m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["psi_3"])], np.pi / 6))
+        # Tail base
+        m.tail_base_theta_4 = pyo.Constraint(m.N,
+                                             rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_4"])],
+                                                                (2 / 3) * np.pi))
+        m.tail_base_psi_4 = pyo.Constraint(m.N,
+                                           rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["psi_4"])],
+                                                              (2 / 3) * np.pi))
+        # Tail mid
+        m.tail_mid_theta_5 = pyo.Constraint(m.N,
+                                            rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_5"])],
+                                                               (2 / 3) * np.pi))
+        m.tail_mid_psi_5 = pyo.Constraint(m.N,
+                                          rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["psi_5"])],
+                                                             (2 / 3) * np.pi))
+        # Front left leg
+        m.l_shoulder_theta_6 = pyo.Constraint(m.N,
+                                              rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_6"])],
+                                                                 (3 / 4) * np.pi))
+        m.l_front_knee_theta_7 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, pyo_i(idx["theta_7"])], 0))
+        # Front right leg
+        m.r_shoulder_theta_8 = pyo.Constraint(m.N,
+                                              rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_8"])],
+                                                                 (3 / 4) * np.pi))
+        m.r_front_knee_theta_9 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, pyo_i(idx["theta_9"])], 0))
+        # Back left leg
+        m.l_hip_theta_10 = pyo.Constraint(m.N,
+                                          rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_10"])],
+                                                             (3 / 4) * np.pi))
+        m.l_back_knee_theta_11 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_11"])], np.pi))
+        # Back right leg
+        m.r_hip_theta_12 = pyo.Constraint(m.N,
+                                          rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_12"])],
+                                                             (3 / 4) * np.pi))
 
-    # m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_13"])], np.pi))
-    # m.l_front_ankle_theta_14 = pyo.Constraint(m.N,
-    #                                           rule=lambda m, n: (-np.pi / 4, m.x[n, pyo_i(idx["theta_14"])],
-    #                                                              (3 / 4) * np.pi))
-    # m.r_front_ankle_theta_15 = pyo.Constraint(m.N,
-    #                                           rule=lambda m, n: (-np.pi / 4, m.x[n, pyo_i(idx["theta_15"])],
-    #                                                              (3 / 4) * np.pi))
-    # m.l_back_ankle_theta_16 = pyo.Constraint(m.N,
-    #                                          rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_16"])], 0))
-    # m.r_back_ankle_theta_17 = pyo.Constraint(m.N,
-    #                                          rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_17"])], 0))
+        m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_13"])], np.pi))
+        m.l_front_ankle_theta_14 = pyo.Constraint(m.N,
+                                                  rule=lambda m, n: (-np.pi / 4, m.x[n, pyo_i(idx["theta_14"])],
+                                                                     (3 / 4) * np.pi))
+        m.r_front_ankle_theta_15 = pyo.Constraint(m.N,
+                                                  rule=lambda m, n: (-np.pi / 4, m.x[n, pyo_i(idx["theta_15"])],
+                                                                     (3 / 4) * np.pi))
+        m.l_back_ankle_theta_16 = pyo.Constraint(m.N,
+                                                 rule=lambda m, n:
+                                                 (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_16"])], 0))
+        m.r_back_ankle_theta_17 = pyo.Constraint(m.N,
+                                                 rule=lambda m, n:
+                                                 (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_17"])], 0))
 
     logger.info("Constaint initialisation...Done")
 
@@ -763,6 +783,7 @@ def run(root_dir: str,
     positions = [pose_to_3d(*states) for states in pose_model.project(x_optimised, inverse=True)]
     model_weight = get_vals_v(m.model_err_weight, [m.P])
     model_err = get_vals_v(m.slack_model, [m.N, m.P])
+    motion_err = get_vals_v(m.slack_motion, [m.N, m.E])
     meas_err = get_vals_v(m.slack_meas, [m.N, m.L, m.D2, m.W])
     meas_weight = get_vals_v(m.meas_err_weight, [m.N, m.L, m.W])
 
@@ -771,8 +792,9 @@ def run(root_dir: str,
                   ddx=ddx_optimised,
                   model_err=model_err,
                   model_weight=model_weight,
-                  meas_err=meas_err.squeeze(),
-                  meas_weight=meas_weight.squeeze())
+                  meas_err=meas_err,
+                  meas_weight=meas_weight,
+                  motion_err=motion_err)
 
     out_fpath = os.path.join(out_dir, "fte.pickle")
     app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
@@ -792,7 +814,7 @@ def run(root_dir: str,
         app.create_labeled_videos(video_paths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
     # Calculate single view error.
-    multi_view_data = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "fte_pw", "fte.pickle"))
+    multi_view_data = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "sd_fte", "fte.pickle"))
     results = traj_error(np.asarray(multi_view_data["positions"]), np.asarray(positions))
 
     logger.info("Done")
