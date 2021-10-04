@@ -164,10 +164,11 @@ def compare_cheetahs(test_fte_file: str,
                      plot_reprojections=False,
                      centered=False):
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
+    fte_file2 = "/Users/zico/msc/dev/AcinoSet/data/2017_09_02/top/jules/run1/fte_1_orig/fte.pickle"
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
-    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file],
+    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file, fte_file2],
                                               scene_fname=scene_fpath,
                                               reprojections=plot_reprojections,
                                               dark_mode=True,
@@ -498,7 +499,7 @@ def run(root_dir: str,
     #                   Optimisation
     #===================================================
     logger.info("Setup optimisation - Start")
-    ext_dim = 6
+    ext_dim = 4
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts
     # ===== SETS =====
@@ -543,9 +544,9 @@ def run(root_dir: str,
         return 1 / R_pw[w - 1][l - 1] if likelihoods[base] > dlc_thresh else 0.0
 
     PR = np.array([
-        0, 0, 0, 0, 0, 0, 0.12634049, 0.09076504, 0.0784007, 0.09098, 0.10081829, 0.11869776, 0.04690148, 0.19327656,
-        0.11984583, 0.18834543, 0.186673, 0.29593392, 0.30801784, 0.23739918, 0.28891427, 0.32369924, 0.31478168,
-        0.28008282, 0.24345391, 0.57400972, 0.53754823, 0.33853531, 0.2979821
+        0, 0, 0, 0, 0.09533427, 0.16010596, 0.19841254, 0.12837967, 0.18141902, 0.10285904, 0.13865856, 0.14205336,
+        0.11832777, 0.19481291, 0.16014159, 0.25620918, 0.17957472, 0.32552707, 0.31751887, 0.3876764, 0.3086351,
+        0.33872515, 0.29739436, 0.28090194, 0.25800307, 0.5968109, 0.55021342, 0.35147244, 0.34728375
     ])**2
     m.meas_err_weight = pyo.Param(m.N, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
@@ -580,7 +581,7 @@ def run(root_dir: str,
     m.poses = pyo.Var(m.N, m.L, m.D3)
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.L, m.D2, m.W, initialize=0.0)
-    m.slack_pose = pyo.Var(m.N, m.L, m.D3, initialize=0.0)
+    m.slack_pose = pyo.Var(m.N, m.P, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
@@ -643,22 +644,22 @@ def run(root_dir: str,
 
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
 
-    def reduced_pose_constraint(m, n, l, d3):
-        # if p > ext_dim:
-        # Contrain poses that are close to the reduced pose space.
-        x = [m.x[n, i] for i in range(ext_dim + 1, P + 1)]
-        # pose = [[m.poses[n, l, d3] for d3 in m.D3] for l in m.L]
-        x_0 = vec_scale(vec_sub(x, pose_model.mean.tolist()), (1 / pose_model.std).tolist())
-        [y] = mat_mul(mat_mul([x_0], pose_model.P.T.tolist()), pose_model.P.tolist())
-        x_r = vec_add(vec_scale(y, pose_model.std.tolist()), pose_model.mean.tolist())
-        reconstructed_pose = pose_to_3d(m.x[n, 1], m.x[n, 2], m.x[n, 3], m.x[n, 4], m.x[n, 5], m.x[n, 6], *x_r)
-        # return pose_distance(reconstructed_pose, pose) - m.slack_pose[n] == 0.0
-        return reconstructed_pose[l - 1, d3 - 1] - m.poses[n, l, d3] - m.slack_pose[n, l, d3] == 0.0
-        # return m.x[n, p] - x_r[p - 1 - ext_dim] - m.slack_pose[n, p] == 0.0
-        # else:
-        #     return pyo.Constraint.Skip
+    def reduced_pose_constraint(m, n, p):
+        if p > ext_dim:
+            # Contrain poses that are close to the reduced pose space.
+            x = [m.x[n, i] for i in range(ext_dim + 1, P + 1)]
+            x_0 = vec_scale(vec_sub(x, pose_model.mean.tolist()), (1 / pose_model.std).tolist())
+            [y] = mat_mul(mat_mul([x_0], pose_model.P.T.tolist()), pose_model.P.tolist())
+            x_r = vec_add(vec_scale(y, pose_model.std.tolist()), pose_model.mean.tolist())
+            # pose = [[m.poses[n, l, d3] for d3 in m.D3] for l in m.L]
+            # reconstructed_pose = pose_to_3d(m.x[n, 1], m.x[n, 2], m.x[n, 3], m.x[n, 4], m.x[n, 5], m.x[n, 6], *x_r)
+            # return pose_distance(reconstructed_pose, pose) - m.slack_pose[n] == 0.0
+            # return reconstructed_pose[l - 1, d3 - 1] - m.poses[n, l, d3] - m.slack_pose[n, l, d3] == 0.0
+            return m.x[n, p] - x_r[p - 1 - ext_dim] - m.slack_pose[n, p] == 0.0
+        else:
+            return pyo.Constraint.Skip
 
-    m.reduced_pose_constraint = pyo.Constraint(m.N, m.L, m.D3, rule=reduced_pose_constraint)
+    m.reduced_pose_constraint = pyo.Constraint(m.N, m.P, rule=reduced_pose_constraint)
 
     # MEASUREMENT
     def measurement_constraints(m, n, l, d2, w):
@@ -744,14 +745,12 @@ def run(root_dir: str,
             # Model Error
             for p in m.P:
                 slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
-                # slack_pose_err += m.pose_err_weight[p] * m.slack_pose[n, p]**2
+                slack_pose_err += m.pose_err_weight[p] * m.slack_pose[n, p]**2
             # Measurement Error
             for l in m.L:
                 for d2 in m.D2:
                     for w in m.W:
                         slack_meas_err += loss_function(m.meas_err_weight[n, l, w] * m.slack_meas[n, l, d2, w], loss)
-                for d3 in m.D3:
-                    slack_pose_err += (1 / 0.1 * m.slack_pose[n, l, d3])**2
         return 1e-3 * (slack_meas_err + slack_model_err + slack_pose_err)
 
     m.obj = pyo.Objective(rule=obj)
@@ -794,7 +793,7 @@ def run(root_dir: str,
     positions = [pose_to_3d(*states) for states in x_optimised]
     model_weight = get_vals_v(m.model_err_weight, [m.P])
     model_err = get_vals_v(m.slack_model, [m.N, m.P])
-    pose_err = get_vals_v(m.slack_pose, [m.N, m, L, m.D3])
+    pose_err = get_vals_v(m.slack_pose, [m.N, m.P])
     meas_err = get_vals_v(m.slack_meas, [m.N, m.L, m.D2, m.W])
     meas_weight = get_vals_v(m.meas_err_weight, [m.N, m.L, m.W])
 

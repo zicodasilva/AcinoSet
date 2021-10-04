@@ -78,9 +78,9 @@ def get_pose_params():
         'x_0',
         'y_0',
         'z_0',  # head position in inertial
-        'phi_0',
-        'theta_0',
         'psi_0',  # head rotation in inertial
+        'theta_0',
+        'phi_0',
         'phi_1',
         'theta_1',
         'psi_1',  # neck
@@ -354,6 +354,12 @@ class PoseReduction:
         df = pd.read_hdf(dataset_fname)
         self.num_vars = num_vars
         self.ext_dim = ext_dim
+        # get a list of the columns
+        col_list = df.columns.tolist()
+        # use this handy way to swap the elements
+        col_list[3], col_list[5] = col_list[5], col_list[3]
+        # assign back, the order will now be swapped
+        df = df[col_list]
         X = df.iloc[:, self.ext_dim:self.num_vars].to_numpy()
         self.std = X.std(axis=0)
         self.mean = X.mean(axis=0)
