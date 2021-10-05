@@ -78,9 +78,9 @@ def get_pose_params():
         'x_0',
         'y_0',
         'z_0',  # head position in inertial
-        'psi_0',  # head rotation in inertial
-        'theta_0',
         'phi_0',
+        'theta_0',
+        'psi_0',  # head rotation in inertial
         'phi_1',
         'theta_1',
         'psi_1',  # neck
@@ -354,16 +354,15 @@ class PoseReduction:
         df = pd.read_hdf(dataset_fname)
         self.num_vars = num_vars
         self.ext_dim = ext_dim
-        # get a list of the columns
-        col_list = df.columns.tolist()
-        # use this handy way to swap the elements
-        col_list[3], col_list[5] = col_list[5], col_list[3]
-        # assign back, the order will now be swapped
-        df = df[col_list]
+        # # Swap columns (only used if 4 parameters from ext_dim)
+        # col_list = df.columns.tolist()
+        # col_list[3], col_list[5] = col_list[5], col_list[3]
+        # df = df[col_list]
         X = df.iloc[:, self.ext_dim:self.num_vars].to_numpy()
         self.std = X.std(axis=0)
         self.mean = X.mean(axis=0)
         X0 = (X - self.mean) / self.std
+        # X0 = X - self.mean
         U, s, VT = np.linalg.svd(X0, full_matrices=False)
 
         # Calcuate the explained variance and determine the covariance matrix from singular values.
@@ -379,8 +378,12 @@ class PoseReduction:
         # Get prinical components of dataset.
         self.PC = U[:, :n_comps] * s[:n_comps]
         X1 = self.PC.dot(self.P) * self.std + self.mean
+        # X1 = self.PC.dot(self.P) + self.mean
 
         X_orig = df.iloc[:, :self.num_vars].to_numpy()
+        self.rmse = np.sqrt(np.mean((X_orig[:, self.ext_dim:] - X1)**2, axis=0))
+        self.error_variance = np.var(X_orig[:, self.ext_dim:] - X1, axis=0)
+
         reconstructed_states = np.concatenate((X_orig[:, :self.ext_dim], X1), axis=1)
         positions_orig = np.array([get_3d_marker_coords(pose) for pose in X_orig])
         positions_pca = np.array([get_3d_marker_coords(pose) for pose in reconstructed_states])
@@ -397,9 +400,13 @@ class PoseReduction:
             else: X = X[self.ext_dim:]
             if inverse: return self.get_full_pose(X_full, np.dot(X, self.P) * self.std + self.mean)
             return self.get_full_pose(X_full, np.dot((X - self.mean) / self.std, self.P.T))
+            # if inverse: return self.get_full_pose(X_full, np.dot(X, self.P) + self.mean)
+            # return self.get_full_pose(X_full, np.dot(X - self.mean, self.P.T))
 
         if inverse: return np.dot(X, self.P) * self.std + self.mean
         return np.dot((X - self.mean) / self.std, self.P.T)
+        # if inverse: return np.dot(X, self.P) + self.mean
+        # return np.dot(X - self.mean, self.P.T)
 
     def get_full_pose(self, X: np.ndarray, X_reduced: np.ndarray) -> np.ndarray:
         if len(X.shape) > 1:
