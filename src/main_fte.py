@@ -237,6 +237,7 @@ def run(root_dir: str,
         n_comps: int = 9,
         pairwise_included: int = 0,
         reduced_space: bool = False,
+        include_obj_orientation: bool = False,
         init_fte=False,
         opt=None,
         out_dir_prefix: str = None,
@@ -495,7 +496,10 @@ def run(root_dir: str,
     #                   Optimisation
     #===================================================
     logger.info("Setup optimisation - Start")
-    ext_dim = 6
+    if include_obj_orientation:
+        ext_dim = 4
+    else:
+        ext_dim = 6
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts
     # ===== SETS =====
@@ -519,10 +523,11 @@ def run(root_dir: str,
 
     # Instantiate the reduced pose model.
     pose_model = misc.PoseReduction("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_pose.h5",
-                                    num_vars=P,
+                                    pose_params=idx,
                                     ext_dim=ext_dim,
-                                    n_comps=n_comps)
-    pose_var = np.hstack((np.zeros(ext_dim), pose_model.error_variance))
+                                    n_comps=n_comps,
+                                    standardise=True)
+    pose_var = pose_model.error_variance
     if reduced_space:
         Q = np.abs(pose_model.project(Q))
     # ======= WEIGHTS =======
