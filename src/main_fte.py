@@ -164,11 +164,10 @@ def compare_cheetahs(test_fte_file: str,
                      plot_reprojections=False,
                      centered=False):
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
-    fte_file2 = "/Users/zico/msc/dev/AcinoSet/data/2017_09_02/top/jules/run1/fte_1_orig/fte.pickle"
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
-    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file, fte_file2],
+    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file],
                                               scene_fname=scene_fpath,
                                               reprojections=plot_reprojections,
                                               dark_mode=True,
@@ -234,10 +233,11 @@ def run(root_dir: str,
         end_frame: int,
         dlc_thresh: float,
         loss="redescending",
-        n_comps: int = 9,
+        n_comps: int = 5,
         pairwise_included: int = 0,
         reduced_space: bool = False,
-        include_obj_orientation: bool = False,
+        inc_obj_orien: bool = False,
+        inc_obj_vel: bool = True,
         init_fte=False,
         opt=None,
         out_dir_prefix: str = None,
@@ -416,9 +416,9 @@ def run(root_dir: str,
         4,
         7,
         5,  # head position in inertial
-        7,
+        13,
         9,
-        10,  # head rotation in inertial
+        26,  # head rotation in inertial
         32,
         18,
         12,  # neck
@@ -496,7 +496,7 @@ def run(root_dir: str,
     #                   Optimisation
     #===================================================
     logger.info("Setup optimisation - Start")
-    if include_obj_orientation:
+    if inc_obj_orien:
         ext_dim = 4
     else:
         ext_dim = 6
@@ -522,12 +522,19 @@ def run(root_dir: str,
     pair_dict = misc.get_pairwise_graph()
 
     # Instantiate the reduced pose model.
+    if inc_obj_vel and not reduced_space:
+        idx["dx_0"] = P
+        idx["dy_0"] = P + 1
+        idx["dz_0"] = P + 2
+        idx["dphi_0"] = P + 3
+        idx["dtheta_0"] = P + 4
+        idx["dpsi_0"] = P + 5
     pose_model = misc.PoseReduction("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_pose.h5",
                                     pose_params=idx,
                                     ext_dim=ext_dim,
                                     n_comps=n_comps,
                                     standardise=True)
-    pose_var = pose_model.error_variance
+    pose_var = 0.3 * pose_model.error_variance
     if reduced_space:
         Q = np.abs(pose_model.project(Q))
     # ======= WEIGHTS =======
@@ -656,6 +663,8 @@ def run(root_dir: str,
         def reduced_pose_constraint(m, n, p):
             # Contrain poses that are close to the reduced pose space.
             x = [m.x[n, i] for i in range(1, P + 1)]
+            if inc_obj_vel:
+                x += [m.dx[n, i] for i in range(1, ext_dim + 1)]
             x_r = pose_model.project(pose_model.project(np.asarray(x)), inverse=True).tolist()
             return m.x[n, p] - x_r[p - 1] - m.slack_pose[n, p] == 0.0
 
