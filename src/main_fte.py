@@ -135,6 +135,8 @@ def compare_traj_error(fte_orig: str,
     plt.plot([np.mean(single_view_error)] * len(single_view_error), label="Mean Single View", linestyle="--")
     plt.plot(pose_model_error, label="Single View Motion Prior")
     plt.plot([np.mean(pose_model_error)] * len(pose_model_error), label="Mean Single View Motion Prior", linestyle="--")
+    plt.xlabel("Time")
+    plt.ylabel("Error (mm)")
     ax = plt.gca()
     ax.legend()
     plt.show(block=True)
