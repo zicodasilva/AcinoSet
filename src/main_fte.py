@@ -99,15 +99,45 @@ def train_motion_model(n: int, start_idx: int, window_size: int, window_time: in
     return pipeline, np.asarray(variance)
 
 
-def traj_error(X: np.ndarray, Y: np.ndarray) -> pd.DataFrame:
+def traj_error(X: np.ndarray, Y: np.ndarray, plot: bool = False) -> Tuple[pd.DataFrame, np.ndarray]:
     markers = misc.get_markers()
     X -= np.expand_dims(np.mean(X, axis=1), axis=1)
     Y -= np.expand_dims(np.mean(Y, axis=1), axis=1)
-    mpjpe_mm = np.mean(np.sqrt(np.sum((X - Y)**2, axis=2)), axis=0) * 1000.0
+    distances = np.sqrt(np.sum((X - Y)**2, axis=2))
+    trajectory_error_mm = np.mean(distances, axis=1) * 1000.0
+    mpjpe_mm = np.mean(distances, axis=0) * 1000.0
     result = pd.DataFrame(mpjpe_mm.reshape(1, len(markers)), columns=markers)
     logger.info(f"Single view error [mm] across the entire trajectory: {float(result.mean(axis=1))}")
 
-    return result.transpose()
+    return result.transpose(), trajectory_error_mm
+
+
+def compare_traj_error(fte_orig: str,
+                       fte: str,
+                       root_dir: str,
+                       data_dir: str,
+                       fte_type: str = "sd_fte",
+                       out_dir_prefix: str = None) -> None:
+    import matplotlib.pyplot as plt
+
+    if out_dir_prefix:
+        fte_multi_view = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
+    else:
+        fte_multi_view = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
+    multi_view_data = data_ops.load_pickle(fte_multi_view)
+    single_view_data = data_ops.load_pickle(fte_orig)
+    pose_model_data = data_ops.load_pickle(fte)
+    _, single_view_error = traj_error(np.asarray(multi_view_data["positions"]),
+                                      np.asarray(single_view_data["positions"]))
+    _, pose_model_error = traj_error(np.asarray(multi_view_data["positions"]), np.asarray(pose_model_data["positions"]))
+    plt.figure()
+    plt.plot(single_view_error, label="Single View")
+    plt.plot([np.mean(single_view_error)] * len(single_view_error), label="Mean Single View", linestyle="--")
+    plt.plot(pose_model_error, label="Single View Motion Prior")
+    plt.plot([np.mean(pose_model_error)] * len(pose_model_error), label="Mean Single View Motion Prior", linestyle="--")
+    ax = plt.gca()
+    ax.legend()
+    plt.show(block=True)
 
 
 def get_vals_v(var: Union[pyo.Var, pyo.Param], idxs: list) -> np.ndarray:
@@ -496,6 +526,7 @@ def run(root_dir: str,
     #                   Optimisation
     #===================================================
     logger.info("Setup optimisation - Start")
+    root_dim = 6
     if inc_obj_orien:
         ext_dim = 4
     else:
@@ -523,17 +554,13 @@ def run(root_dir: str,
 
     # Instantiate the reduced pose model.
     if inc_obj_vel and not reduced_space:
-        idx["dx_0"] = P
-        idx["dy_0"] = P + 1
-        idx["dz_0"] = P + 2
-        idx["dphi_0"] = P + 3
-        idx["dtheta_0"] = P + 4
-        idx["dpsi_0"] = P + 5
-    pose_model = misc.PoseReduction("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_pose.h5",
-                                    pose_params=idx,
-                                    ext_dim=ext_dim,
-                                    n_comps=n_comps,
-                                    standardise=True)
+        for state in list(idx.keys())[:root_dim]:
+            idx["d" + state] = P + idx[state]
+    pose_model = misc.PoseModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_pose.h5",
+                                pose_params=idx,
+                                ext_dim=ext_dim,
+                                n_comps=n_comps,
+                                standardise=True)
     pose_var = 0.3 * pose_model.error_variance
     if reduced_space:
         Q = np.abs(pose_model.project(Q))
@@ -664,7 +691,7 @@ def run(root_dir: str,
             # Contrain poses that are close to the reduced pose space.
             x = [m.x[n, i] for i in range(1, P + 1)]
             if inc_obj_vel:
-                x += [m.dx[n, i] for i in range(1, ext_dim + 1)]
+                x += [m.dx[n, i] for i in range(1, root_dim + 1)]
             x_r = pose_model.project(pose_model.project(np.asarray(x)), inverse=True).tolist()
             return m.x[n, p] - x_r[p - 1] - m.slack_pose[n, p] == 0.0
 

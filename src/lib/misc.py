@@ -354,7 +354,7 @@ def rot_z(z):
     return func([[c, s, 0], [-s, c, 0], [0, 0, 1]])
 
 
-class PoseReduction:
+class PoseModel:
     def __init__(self, dataset_fname: str, pose_params: dict, ext_dim: int, n_comps: int, standardise: bool = False):
         self.p_idx = pose_params
         self.num_vars = len(pose_params.keys())
@@ -392,7 +392,7 @@ class PoseReduction:
         eig_values = s**2
         variance_explained = np.cumsum(eig_values) / np.sum(eig_values)
         self.S = np.diag(s)
-        # COV = S @ S
+        self.covar = np.dot(VT.T, self.S)
 
         # Obtain the principal axes (i.e. new basis vectors) and place in a projection matrix.
         self.P = VT[:n_comps, :]
