@@ -14,89 +14,12 @@ import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 from lib import misc, utils, app
 from lib.calib import triangulate_points_fisheye, project_points_fisheye
+from lib.models import PoseModel, MotionModel
+
 from py_utils import data_ops, log
-from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split
-from sklearn import preprocessing
 
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
-
-
-def pose_distance(X: list, Y: list):
-    distance = [pyo.sqrt(sum((a - b)**2 for a, b in zip(X_row, Y[i]))) for i, X_row in enumerate(X)]
-    return sum(distance) / len(distance)
-
-
-def mat_mul(X: list, Y: list):
-    return [[sum(a * b for a, b in zip(X_row, Y_col)) for Y_col in zip(*Y)] for X_row in X]
-
-
-def vec_add(x: list, y: list):
-    return [a + b for a, b in zip(x, y)]
-
-
-def vec_sub(x: list, y: list):
-    return [a - b for a, b in zip(x, y)]
-
-
-def vec_scale(x: list, y: list):
-    return [a * b for a, b in zip(x, y)]
-
-
-def scale_motion(X: list, scale: list, translate: list) -> list:
-    # X *= self.scale_ X += self.min_
-    X_ = sum(X, [])
-    X_temp = [a * b for a, b in zip(X_, scale)]
-    return [a + b for a, b in zip(X_temp, translate)]
-
-
-def predict_motion(X: list, B: list, C: list, D: list = None, E: list = None) -> list:
-    if D and E: [y_pred] = mat_mul([scale_motion(X, D, E)], B)
-    else: [y_pred] = mat_mul(X, B)
-
-    return [a + b for a, b in zip(y_pred, C)]
-
-
-def train_motion_model(n: int, start_idx: int, window_size: int, window_time: int) -> Tuple[Pipeline, np.ndarray]:
-    logger.info("Train motion prediction model")
-    model_dir = "/Users/zico/msc/data/CheetahRuns/v4/model"
-    df = pd.read_hdf(os.path.join(model_dir, "dataset_runs.h5"))
-    idx = np.where(df.index.values == 0)[0]
-    df_in = df.iloc[:, start_idx:start_idx + n]
-    df_list = []
-    end_segment = 0
-    for begin_segment, end_segment in zip(idx, idx[1:]):
-        df_list.append(
-            data_ops.series_to_supervised(df_in.iloc[begin_segment:end_segment], n_in=window_size, n_step=window_time))
-    df_list.append(data_ops.series_to_supervised(df_in.iloc[end_segment:], n_in=window_size, n_step=window_time))
-    df_input = pd.concat(df_list)
-
-    pipeline = Pipeline(steps=[("norm", preprocessing.MinMaxScaler()), ("model", LinearRegression())])
-    xy_set = df_input.to_numpy()
-    X = xy_set[:, 0:(n * window_size)]
-    y = xy_set[:, (n * window_size):]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
-    logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
-    pipeline.fit(X_train, y_train)
-    B = pipeline["model"].coef_.T.tolist()
-    C = pipeline["model"].intercept_.tolist()
-    D = pipeline["norm"].scale_.tolist()
-    E = pipeline["norm"].min_.tolist()
-    y_pred = pipeline.predict(X_test)
-
-    y_pred_manual = np.asarray([predict_motion([pose.tolist()], B, C, D, E) for pose in X_test])
-    check_motion_predict = (y_pred - y_pred_manual)**2
-    if np.sum(check_motion_predict) < 1e-15:
-        logger.info("Pure Python LR prediction matches sklearn :)")
-
-    residuals = y_test - y_pred_manual
-    variance = np.var(residuals, axis=0)
-    logger.info(f"Model prediction error: {np.mean(residuals**2)}")
-
-    return pipeline, np.asarray(variance)
 
 
 def traj_error(X: np.ndarray, Y: np.ndarray, plot: bool = False) -> Tuple[pd.DataFrame, np.ndarray]:
@@ -195,11 +118,12 @@ def compare_cheetahs(test_fte_file: str,
                      out_dir_prefix: str = None,
                      plot_reprojections=False,
                      centered=False):
+    test2 = "/Users/zico/msc/dev/AcinoSet/data/2017_08_29/top/jules/run1_1/fte_1_orig/fte.pickle"
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
-    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file],
+    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file, test2],
                                               scene_fname=scene_fpath,
                                               reprojections=plot_reprojections,
                                               dark_mode=True,
@@ -533,6 +457,9 @@ def run(root_dir: str,
         ext_dim = 4
     else:
         ext_dim = 6
+    window_size = 5
+    window_time = 2
+    window_buf = window_size * window_time
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts
     # ===== SETS =====
@@ -558,12 +485,20 @@ def run(root_dir: str,
     if inc_obj_vel and not reduced_space:
         for state in list(idx.keys())[:root_dim]:
             idx["d" + state] = P + idx[state]
-    pose_model = misc.PoseModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_pose.h5",
-                                pose_params=idx,
-                                ext_dim=ext_dim,
-                                n_comps=n_comps,
-                                standardise=True)
+    pose_model = PoseModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_pose.h5",
+                           pose_params=idx,
+                           ext_dim=ext_dim,
+                           n_comps=n_comps,
+                           standardise=True)
     pose_var = 0.3 * pose_model.error_variance
+    # Train motion model and make predictions with a predefined window size.
+    motion_model = MotionModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_runs.h5",
+                               P,
+                               window_size=window_size,
+                               window_time=window_time)
+    pred_var = motion_model.error_variance
+    pred_var = np.hstack((np.zeros(root_dim), pred_var))
+
     if reduced_space:
         Q = np.abs(pose_model.project(Q))
     # ======= WEIGHTS =======
@@ -588,6 +523,7 @@ def run(root_dir: str,
     m.meas_err_weight = pyo.Param(m.N, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
     m.pose_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pose_var[p - 1] if pose_var[p - 1] != 0.0 else 0.0)
+    m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1] if pred_var[p - 1] != 0 else 0.0)
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, l, d2, w):
@@ -619,6 +555,7 @@ def run(root_dir: str,
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.L, m.D2, m.W, initialize=0.0)
     m.slack_pose = pyo.Var(m.N, m.P, initialize=0.0)
+    m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
@@ -686,6 +623,17 @@ def run(root_dir: str,
         return m.ddx[n, p] == m.ddx[n - 1, p] + m.slack_model[n, p] if n > 1 else pyo.Constraint.Skip
 
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
+
+    def motion_constraint(m, n, p):
+        if n > window_buf:
+            # Pred using LR model
+            X = np.array([[m.x[n - w * window_time, i] for i in range(1, P + 1)] for w in range(window_size, 0, -1)])
+            y = motion_model.predict(X).tolist()
+            return m.x[n, p] - y[p - 1] - m.slack_motion[n, p] == 0.0
+        else:
+            return pyo.Constraint.Skip
+
+    m.motion_constraint = pyo.Constraint(m.N, m.P, rule=motion_constraint)
 
     if not reduced_space:
 
@@ -782,11 +730,13 @@ def run(root_dir: str,
     def obj(m):
         slack_model_err = 0.0
         slack_pose_err = 0.0
+        slack_motion_err = 0.0
         slack_meas_err = 0.0
         for n in m.N:
             # Model Error
             for p in m.P:
                 slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
+                slack_motion_err += m.motion_err_weight[p] * m.slack_motion[n, p]**2
                 if not reduced_space:
                     slack_pose_err += m.pose_err_weight[p] * m.slack_pose[n, p]**2
             # Measurement Error
@@ -794,7 +744,8 @@ def run(root_dir: str,
                 for d2 in m.D2:
                     for w in m.W:
                         slack_meas_err += loss_function(m.meas_err_weight[n, l, w] * m.slack_meas[n, l, d2, w], loss)
-        return 1e-3 * (slack_meas_err + slack_model_err + slack_pose_err)
+        return 1e-3 * (slack_meas_err + slack_model_err + slack_pose_err + slack_motion_err)
+        # return 0.1 * slack_meas_err + slack_model_err + slack_pose_err + slack_motion_err
 
     m.obj = pyo.Objective(rule=obj)
 
@@ -840,6 +791,7 @@ def run(root_dir: str,
     model_weight = get_vals_v(m.model_err_weight, [m.P])
     model_err = get_vals_v(m.slack_model, [m.N, m.P])
     pose_err = get_vals_v(m.slack_pose, [m.N, m.P])
+    motion_err = get_vals_v(m.slack_motion, [m.N, m.P])
     meas_err = get_vals_v(m.slack_meas, [m.N, m.L, m.D2, m.W])
     meas_weight = get_vals_v(m.meas_err_weight, [m.N, m.L, m.W])
 
@@ -850,7 +802,8 @@ def run(root_dir: str,
                   model_weight=model_weight,
                   meas_err=meas_err,
                   meas_weight=meas_weight,
-                  motion_err=pose_err)
+                  pose_err=pose_err,
+                  motion_err=motion_err)
 
     out_fpath = os.path.join(out_dir, "fte.pickle")
     app.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
