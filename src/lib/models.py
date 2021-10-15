@@ -3,6 +3,7 @@ import pandas as pd
 
 from sklearn.linear_model import LinearRegression, Lasso
 from sklearn.model_selection import train_test_split
+from sklearn import metrics
 
 from lib import misc
 
@@ -160,7 +161,12 @@ class MotionModel:
         # Determine the error for the test set.
         residuals = y_test - y_pred
         self.error_variance = np.var(residuals, axis=0)
-        logger.info(f"Model model average residual: {np.mean(residuals**2)}")
+        rmse = metrics.mean_squared_error(y_test, y_pred, squared=False)
+        explained_variance = metrics.explained_variance_score(y_test, y_pred)
+        max_error = metrics.max_error(y_test.flatten(), y_pred.flatten())
+
+        logger.info(
+            f"Model RMSE: {rmse:.6f}, Max Error: {max_error:.6f}, Explained variance: {100*explained_variance:.2f}%")
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return np.dot(self.lr_model.coef_, X.flatten()) + self.lr_model.intercept_

@@ -496,8 +496,7 @@ def run(root_dir: str,
                                P,
                                window_size=window_size,
                                window_time=window_time)
-    pred_var = motion_model.error_variance
-    pred_var = np.hstack((np.zeros(root_dim), pred_var))
+    pred_var = 0.5 * motion_model.error_variance
 
     if reduced_space:
         Q = np.abs(pose_model.project(Q))
@@ -745,7 +744,6 @@ def run(root_dir: str,
                     for w in m.W:
                         slack_meas_err += loss_function(m.meas_err_weight[n, l, w] * m.slack_meas[n, l, d2, w], loss)
         return 1e-3 * (slack_meas_err + slack_model_err + slack_pose_err + slack_motion_err)
-        # return 0.1 * slack_meas_err + slack_model_err + slack_pose_err + slack_motion_err
 
     m.obj = pyo.Objective(rule=obj)
 
