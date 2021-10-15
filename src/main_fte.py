@@ -457,8 +457,8 @@ def run(root_dir: str,
         ext_dim = 4
     else:
         ext_dim = 6
-    window_size = 5
-    window_time = 2
+    window_size = 10
+    window_time = 1
     window_buf = window_size * window_time
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts

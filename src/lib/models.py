@@ -147,8 +147,8 @@ class MotionModel:
         df_input = pd.concat(df_list)
 
         # Instantiate the LR model and split the dataset into train and test sets.
-        self.lr_model = LinearRegression()
-        # self.lr_model = Lasso(alpha=0.01, random_state=42, max_iter=5000)
+        # self.lr_model = LinearRegression()
+        self.lr_model = Lasso(alpha=1e-4, random_state=42, max_iter=8000)
         xy_set = df_input.to_numpy()
         X = xy_set[:, 0:(num_params * window_size)]
         y = xy_set[:, (num_params * window_size):]
@@ -157,6 +157,7 @@ class MotionModel:
         logger.info(f"Motion model X_test: {X_test.shape}, y_test: {y_test.shape}")
         self.lr_model.fit(X_train, y_train)
         y_pred = self.lr_model.predict(X_test)
+        logger.info(f"Number of non-zero parameters in LR model: {np.count_nonzero(self.lr_model.coef_)}")
 
         # Determine the error for the test set.
         residuals = y_test - y_pred
