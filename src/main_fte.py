@@ -53,7 +53,7 @@ def compare_traj_error(fte_orig: str,
     _, single_view_error = traj_error(np.asarray(multi_view_data["positions"]),
                                       np.asarray(single_view_data["positions"]))
     _, pose_model_error = traj_error(np.asarray(multi_view_data["positions"]), np.asarray(pose_model_data["positions"]))
-    plt.figure()
+    fig = plt.figure()
     plt.plot(single_view_error, label="Single View")
     plt.plot([np.mean(single_view_error)] * len(single_view_error), label="Mean Single View", linestyle="--")
     plt.plot(pose_model_error, label="Single View Motion Prior")
@@ -62,7 +62,9 @@ def compare_traj_error(fte_orig: str,
     plt.ylabel("Error (mm)")
     ax = plt.gca()
     ax.legend()
-    plt.show(block=True)
+    # plt.show(block=True)
+    fig.savefig(os.path.join(os.path.dirname(fte), "traj_error.png"))
+    # plt.close()
 
 
 def get_vals_v(var: Union[pyo.Var, pyo.Param], idxs: list) -> np.ndarray:
@@ -118,7 +120,6 @@ def compare_cheetahs(test_fte_file: str,
                      out_dir_prefix: str = None,
                      plot_reprojections=False,
                      centered=False):
-    test2 = "/Users/zico/msc/dev/AcinoSet/data/2017_08_29/top/jules/run1_1/fte_1_orig/fte.pickle"
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
@@ -457,8 +458,8 @@ def run(root_dir: str,
         ext_dim = 4
     else:
         ext_dim = 6
-    window_size = 10
-    window_time = 1
+    window_size = 5
+    window_time = 2
     window_buf = window_size * window_time
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts
@@ -586,7 +587,7 @@ def run(root_dir: str,
         #init pose
         var_list = [m.x[n, p].value for p in m.P]
         if reduced_space:
-            var_list = pose_model.project(np.asarray(var_list), inverse=True)
+            var_list = pose_model.project(var_list, inverse=True)
         for l in m.L:
             [pos] = pos_funcs[l - 1](*var_list)
             for d3 in m.D3:
@@ -600,7 +601,7 @@ def run(root_dir: str,
         # Get 3d points
         var_list = [m.x[n, p] for p in m.P]
         if reduced_space:
-            var_list = pose_model.project(np.asarray(var_list), inverse=True)
+            var_list = pose_model.project(var_list, inverse=True)
         [pos] = pos_funcs[l - 1](*var_list)
         return pos[d3 - 1] == m.poses[n, l, d3]
 
@@ -626,7 +627,7 @@ def run(root_dir: str,
     def motion_constraint(m, n, p):
         if n > window_buf:
             # Pred using LR model
-            X = np.array([[m.x[n - w * window_time, i] for i in range(1, P + 1)] for w in range(window_size, 0, -1)])
+            X = [[m.x[n - w * window_time, i] for i in range(1, P + 1)] for w in range(window_size, 0, -1)]
             y = motion_model.predict(X).tolist()
             return m.x[n, p] - y[p - 1] - m.slack_motion[n, p] == 0.0
         else:
@@ -641,7 +642,7 @@ def run(root_dir: str,
             x = [m.x[n, i] for i in range(1, P + 1)]
             if inc_obj_vel:
                 x += [m.dx[n, i] for i in range(1, root_dim + 1)]
-            x_r = pose_model.project(pose_model.project(np.asarray(x)), inverse=True).tolist()
+            x_r = pose_model.project(pose_model.project(x), inverse=True).tolist()
             return m.x[n, p] - x_r[p - 1] - m.slack_pose[n, p] == 0.0
 
         m.reduced_pose_constraint = pyo.Constraint(m.N, m.P, rule=reduced_pose_constraint)
@@ -822,117 +823,56 @@ def run(root_dir: str,
 
     # Calculate single view error.
     multi_view_data = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "sd_fte", "fte.pickle"))
-    results = traj_error(np.asarray(multi_view_data["positions"]), np.asarray(positions))
+    compare_traj_error(os.path.join(os.path.dirname(out_dir), f"fte_pw_{cam_idx+1}", "fte.pickle"),
+                       out_fpath,
+                       root_dir,
+                       data_path,
+                       out_dir_prefix=out_dir_prefix)
 
     logger.info("Done")
 
 
-if __name__ == "__main__":
+def run_dataset_test():
     import gc
-    working_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
-    video_data = data_ops.load_pickle("/data/zico/CheetahResults/test_videos_list.pickle")
-    tests = video_data["test_dirs"]
-    dir_prefix = "/data/zico/CheetahResults/paws-included"
-    manually_selected_frames = {
-        "2019_03_03/phantom/run": (73, 272),
-        "2017_12_12/top/cetane/run1_1": (100, 241),
-        "2019_03_05/jules/run": (58, 176),
-        "2019_03_09/lily/run": (80, 180),
-        "2017_09_03/top/zorro/run1_2": (20, 120),
-        "2017_08_29/top/phantom/run1_1": (20, 170),
-        "2017_12_21/top/lily/run1": (7, 106),
-        "2019_03_03/menya/run": (20, 130),
-        "2017_12_10/top/phantom/run1": (30, 130),
-        "2017_09_03/bottom/zorro/run2_1": (126, 325),
-        "2019_02_27/ebony/run": (20, 200),
-        "2017_12_09/bottom/phantom/run2": (18, 117),
-        "2017_09_03/bottom/zorro/run2_3": (1, 200),
-        "2017_08_29/top/jules/run1_1": (10, 110),
-        "2017_09_02/top/jules/run1": (10, 110),
-        "2019_03_07/menya/run": (60, 160),
-        "2017_09_02/top/phantom/run1_2": (20, 160),
-        "2019_03_05/lily/run": (150, 250),
-        "2017_12_12/top/cetane/run1_2": (3, 202),
-        "2019_03_07/phantom/run": (100, 200),
-        "2019_02_27/romeo/run": (12, 190),
-        "2017_08_29/top/jules/run1_2": (30, 130),
-        "2017_12_16/top/cetane/run1": (110, 210),
-        "2017_09_02/top/phantom/run1_1": (33, 150),
-        "2017_09_02/top/phantom/run1_3": (35, 135),
-        "2017_09_03/top/zorro/run1_1": (4, 203),
-        "2019_02_27/kiara/run": (10, 110),
-        "2017_09_02/bottom/jules/run2": (35, 171),
-        "2017_09_03/bottom/zorro/run2_2": (32, 141)
+    working_dir = "/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos"
+    dir_prefix = "/Users/zico/msc/dev/AcinoSet/data"
+    tests = {
+        "2017_08_29/top/jules/run1_1": (10, 110, 1),
+        "2017_09_02/top/phantom/run1_3": (50, 130, 4),
+        "2017_09_02/top/jules/run1": (21, 100, 1),
+        "2017_08_29/top/phantom/run1_1": (20, 170, 1)
     }
-    bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1", "2017_12_17/top/zorro/flick1")
-    if platform.python_implementation() == "PyPy":
-        time0 = time()
-        logger.info("Run reconstruction on all videos...")
-        # Initialise the Ipopt solver.
-        optimiser = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
-        # solver options
-        optimiser.options["print_level"] = 5
-        optimiser.options["max_iter"] = 400
-        optimiser.options["max_cpu_time"] = 10000
-        optimiser.options["Tol"] = 1e-1
-        optimiser.options["OF_print_timing_statistics"] = "yes"
-        optimiser.options["OF_print_frequency_time"] = 10
-        optimiser.options["OF_hessian_approximation"] = "limited-memory"
-        optimiser.options["OF_accept_every_trial_step"] = "yes"
-        optimiser.options["linear_solver"] = "ma86"
-        optimiser.options["OF_ma86_scaling"] = "none"
-        valid_vids = set(manually_selected_frames.keys())
-        for test_vid in tqdm(tests):
-            # Force garbage collection so that the repeated model creation does not overflow the memory!
-            gc.collect()
-            current_dir = test_vid.split("/cheetah_videos/")[1]
-            # Filter parameters based on past experience.
-            if current_dir not in valid_vids:
-                # Skip these videos because of erroneous input data.
-                continue
-            start = 1
-            end = -1
-            if current_dir in set(manually_selected_frames.keys()):
-                start = manually_selected_frames[current_dir][0]
-                end = manually_selected_frames[current_dir][1]
-            try:
-                run(working_dir,
-                    current_dir,
-                    start_frame=start,
-                    end_frame=end,
-                    dlc_thresh=0.5,
-                    opt=optimiser,
-                    out_dir_prefix=dir_prefix)
-            except Exception:
-                run(working_dir,
-                    current_dir,
-                    start_frame=-1,
-                    end_frame=1,
-                    dlc_thresh=0.5,
-                    opt=optimiser,
-                    out_dir_prefix=dir_prefix)
+    time0 = time()
+    logger.info("Run through subset...")
+    # Initialise the Ipopt solver.
+    optimiser = SolverFactory("ipopt")  #, executable="/home/zico/lib/ipopt/build/bin/ipopt")
+    # solver options
+    optimiser.options["print_level"] = 5
+    optimiser.options["max_iter"] = 500
+    optimiser.options["max_cpu_time"] = 10000
+    optimiser.options["Tol"] = 1e-1
+    optimiser.options["OF_print_timing_statistics"] = "yes"
+    optimiser.options["OF_print_frequency_time"] = 10
+    optimiser.options["OF_hessian_approximation"] = "limited-memory"
+    optimiser.options["OF_accept_every_trial_step"] = "yes"
+    optimiser.options["linear_solver"] = "ma86"
+    optimiser.options["OF_ma86_scaling"] = "none"
+    for test_vid in tqdm(tests.keys()):
+        # Force garbage collection so that the repeated model creation does not overflow the memory!
+        gc.collect()
+        run(working_dir,
+            test_vid,
+            cam_idx=tests[test_vid][2],
+            start_frame=tests[test_vid][0],
+            end_frame=tests[test_vid][1],
+            dlc_thresh=0.5,
+            opt=optimiser,
+            out_dir_prefix=dir_prefix,
+            generate_reprojection_videos=False)
 
-        time1 = time()
-        logger.info(f"Run through all videos took {time1 - time0:.2f}s")
-    elif platform.python_implementation() == "CPython":
-        time0 = time()
-        logger.info("Run 2D reprojections on all videos...")
-        for test_vid in tqdm(tests):
-            current_dir = test_vid.split("/cheetah_videos/")[1]
-            # Filter parameters based on past experience.
-            if current_dir in bad_videos:
-                # Skip these videos because of erroneous input data.
-                continue
-            try:
-                if dir_prefix:
-                    out_directory = os.path.join(dir_prefix, current_dir, "fte_pw")
-                else:
-                    out_directory = os.path.join(working_dir, current_dir, "fte_pw")
-                video_fpaths = sorted(glob(os.path.join(working_dir, current_dir,
-                                                        "cam[1-9].mp4")))  # original vids should be in the parent dir
-                app.create_labeled_videos(video_fpaths, out_dir=out_directory, draw_skeleton=True, pcutoff=0.5)
-            except Exception:
-                continue
+    time1 = time()
+    logger.info(f"Run through all videos took {time1 - time0:.2f}s")
 
-        time1 = time()
-        logger.info(f"Video generation took {time1 - time0:.2f}s")
+
+if __name__ == "__main__":
+    run_dataset_test()

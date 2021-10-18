@@ -1,9 +1,10 @@
+from typing import Union, Tuple
 import numpy as np
 import pandas as pd
 
-from sklearn.linear_model import LinearRegression, Lasso
+from sklearn.linear_model import LinearRegression, MultiTaskLasso
 from sklearn.model_selection import train_test_split
-from sklearn import metrics
+from sklearn import metrics, preprocessing
 
 from lib import misc
 
@@ -11,6 +12,40 @@ from py_utils import log, data_ops
 
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
+
+
+def generate_xy_dataset(data: pd.DataFrame,
+                        num_vars: int,
+                        window_size: int = 1,
+                        window_time: int = 1,
+                        num_test_set: int = 0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    idx = np.where(data.index.values == 0)[0]
+    df_list = []
+    end_segment = 0
+    for begin_segment, end_segment in zip(idx, idx[1:]):
+        df_list.append(
+            data_ops.series_to_supervised(data.iloc[begin_segment:end_segment], n_in=window_size, n_step=window_time))
+    df_list.append(data_ops.series_to_supervised(data.iloc[end_segment:], n_in=window_size, n_step=window_time))
+    df = pd.concat(df_list)
+    segment_indices = np.where(df.index.values == window_size * window_time)[0]
+
+    xy_set = df.to_numpy()
+    X = xy_set[:, 0:(num_vars * window_size)]
+    y = xy_set[:, (num_vars * window_size):]
+
+    assert len(
+        segment_indices) == 1 or num_test_set < len(segment_indices) // 2, "Can't use a test set > 50% of the dataset"
+
+    if num_test_set > 0:
+        test_idx = segment_indices[-num_test_set]
+        X_train = X[:test_idx]
+        y_train = y[:test_idx]
+        X_test = X[test_idx:]
+        y_test = y[test_idx:]
+
+        return y_train, X_train, y_test, X_test
+    else:
+        return y, X, y, X
 
 
 class PoseModel:
@@ -64,7 +99,7 @@ class PoseModel:
 
         # Calculate reconstruction error and error variance.
         X_orig = df.iloc[:, :self.num_vars].to_numpy()
-        self.rmse = np.sqrt(np.mean((X_orig[:, self.ext_dim:] - X1)**2, axis=0))
+        self.rmse = metrics.mean_squared_error(X_orig[:, self.ext_dim:], X1, squared=False)
         self.error_variance = np.zeros(self.num_vars)
         var = np.var(X_orig[:, self.ext_dim:] - X1, axis=0)
         self.error_variance[self.included_vars] = var
@@ -81,7 +116,8 @@ class PoseModel:
     def pc_std(self):
         return np.std(self.PC, axis=0)
 
-    def project(self, X: np.ndarray, full_state: bool = True, inverse: bool = False) -> np.ndarray:
+    def project(self, X: Union[np.ndarray, list], full_state: bool = True, inverse: bool = False) -> np.ndarray:
+        X = np.asarray(X)
         if full_state:
             X_full = X.copy()
             if len(X.shape) > 1:
@@ -147,8 +183,8 @@ class MotionModel:
         df_input = pd.concat(df_list)
 
         # Instantiate the LR model and split the dataset into train and test sets.
-        # self.lr_model = LinearRegression()
-        self.lr_model = Lasso(alpha=1e-4, random_state=42, max_iter=8000)
+        self.lr_model = LinearRegression()
+        # self.lr_model = MultiTaskLasso(alpha=1e-3, random_state=42, max_iter=10000)
         xy_set = df_input.to_numpy()
         X = xy_set[:, 0:(num_params * window_size)]
         y = xy_set[:, (num_params * window_size):]
@@ -162,12 +198,14 @@ class MotionModel:
         # Determine the error for the test set.
         residuals = y_test - y_pred
         self.error_variance = np.var(residuals, axis=0)
-        rmse = metrics.mean_squared_error(y_test, y_pred, squared=False)
+        self.rmse = metrics.mean_squared_error(y_test, y_pred, squared=False)
         explained_variance = metrics.explained_variance_score(y_test, y_pred)
         max_error = metrics.max_error(y_test.flatten(), y_pred.flatten())
 
         logger.info(
-            f"Model RMSE: {rmse:.6f}, Max Error: {max_error:.6f}, Explained variance: {100*explained_variance:.2f}%")
+            f"Model RMSE: {self.rmse:.6f}, Max Error: {max_error:.6f}, Explained variance: {100*explained_variance:.2f}%"
+        )
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X: Union[np.ndarray, list]) -> np.ndarray:
+        X = np.asarray(X)
         return np.dot(self.lr_model.coef_, X.flatten()) + self.lr_model.intercept_
