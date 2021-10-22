@@ -1,7 +1,7 @@
 import os
 import platform
 import json
-from typing import Union, Tuple
+from typing import Union, Tuple, Dict
 import numpy as np
 from pyomo.core.expr.current import log as pyomo_log
 import sympy as sp
@@ -22,27 +22,34 @@ from py_utils import data_ops, log
 logger = log.logger(__name__)
 
 
-def traj_error(X: np.ndarray, Y: np.ndarray, plot: bool = False) -> Tuple[pd.DataFrame, np.ndarray]:
+def traj_error(X: np.ndarray, Y: np.ndarray, centered: bool = True) -> Tuple[pd.DataFrame, np.ndarray]:
+    X = np.asarray(X)
+    Y = np.asarray(Y)
     markers = misc.get_markers()
-    X -= np.expand_dims(np.mean(X, axis=1), axis=1)
-    Y -= np.expand_dims(np.mean(Y, axis=1), axis=1)
+    if centered:
+        X -= np.expand_dims(np.mean(X, axis=1), axis=1)
+        Y -= np.expand_dims(np.mean(Y, axis=1), axis=1)
     distances = np.sqrt(np.sum((X - Y)**2, axis=2))
     trajectory_error_mm = np.mean(distances, axis=1) * 1000.0
     mpjpe_mm = np.mean(distances, axis=0) * 1000.0
     result = pd.DataFrame(mpjpe_mm.reshape(1, len(markers)), columns=markers)
     logger.info(f"Single view error [mm] across the entire trajectory: {float(result.mean(axis=1))}")
+    result = result.transpose()
+    result.columns = ["mpjpe (mm)"]
 
-    return result.transpose(), trajectory_error_mm
+    return result.astype(float), trajectory_error_mm
 
 
 def compare_traj_error(fte_orig: str,
                        fte: str,
                        root_dir: str,
                        data_dir: str,
+                       cam_pos: np.ndarray,
                        fte_type: str = "sd_fte",
                        out_dir_prefix: str = None) -> None:
     import matplotlib.pyplot as plt
 
+    # Gather data for the mult-view, single-view and single view with contraints.
     if out_dir_prefix:
         fte_multi_view = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     else:
@@ -50,21 +57,61 @@ def compare_traj_error(fte_orig: str,
     multi_view_data = data_ops.load_pickle(fte_multi_view)
     single_view_data = data_ops.load_pickle(fte_orig)
     pose_model_data = data_ops.load_pickle(fte)
-    _, single_view_error = traj_error(np.asarray(multi_view_data["positions"]),
-                                      np.asarray(single_view_data["positions"]))
-    _, pose_model_error = traj_error(np.asarray(multi_view_data["positions"]), np.asarray(pose_model_data["positions"]))
-    fig = plt.figure()
-    plt.plot(single_view_error, label="Single View")
-    plt.plot([np.mean(single_view_error)] * len(single_view_error), label="Mean Single View", linestyle="--")
-    plt.plot(pose_model_error, label="Single View Motion Prior")
-    plt.plot([np.mean(pose_model_error)] * len(pose_model_error), label="Mean Single View Motion Prior", linestyle="--")
+    single_view_mpjpe_mm, single_view_error = traj_error(multi_view_data["positions"], single_view_data["positions"])
+    _, pose_model_error = traj_error(multi_view_data["positions"], pose_model_data["positions"])
+
+    # Plot the error between the single view and snigle view with constraints.
+    fig = plt.figure(figsize=(16, 12), dpi=120)
+    plt.plot(single_view_error, label="single-view")
+    plt.plot([np.mean(single_view_error)] * len(single_view_error), label="mean single-view", linestyle="--")
+    plt.plot(pose_model_error, label="single-view with pose contraints")
+    plt.plot([np.mean(pose_model_error)] * len(pose_model_error),
+             label="mean single-view with pose contraints",
+             linestyle="--")
     plt.xlabel("Time")
     plt.ylabel("Error (mm)")
     ax = plt.gca()
     ax.legend()
-    # plt.show(block=True)
     fig.savefig(os.path.join(os.path.dirname(fte), "traj_error.png"))
-    # plt.close()
+    plt.cla()
+
+    # Plot the X and Y positions of the single view with constraints for the trajectory.
+    pts_3d_spine_multi = np.asarray(multi_view_data["positions"])[:, 4, :]
+    pts_3d_spine_orig = np.asarray(single_view_data["positions"])[:, 4, :]
+    pts_3d_spine = np.asarray(pose_model_data["positions"])[:, 4, :]
+    # fig = plt.figure()
+    plt.plot(pts_3d_spine_multi[:, 0], pts_3d_spine_multi[:, 1], label="multi-view")
+    plt.plot(pts_3d_spine_orig[:, 0], pts_3d_spine_orig[:, 1], label="single-view")
+    plt.plot(pts_3d_spine[:, 0], pts_3d_spine[:, 1], label="single-view with pose constraints")
+    plt.xlabel("Time")
+    plt.ylabel("Positions (m)")
+    plt.ylim((0, 7))
+    ax = plt.gca()
+    ax.legend()
+    fig.savefig(os.path.join(os.path.dirname(fte), "x_y_positions.png"))
+    plt.cla()
+
+    ax = single_view_mpjpe_mm["mpjpe (mm)"].plot(kind="barh")
+    fig = ax.get_figure()
+    plt.xlabel("Error (mm)")
+    plt.ylabel("Bodypart")
+    fig.savefig(os.path.join(os.path.dirname(fte), "mpjpe_dist.png"))
+    plt.cla()
+
+    # Plot the hip and shoulder states to get an idea of how well the gait is tracked.
+    fig, axs = plt.subplots(2, 2, figsize=(16, 12), dpi=120)
+    axs = axs.flatten()
+    p_idx = misc.get_pose_params()
+    x_gt = multi_view_data["x"]
+    x = pose_model_data["x"]
+    states = ("theta_6", "theta_8", "theta_10", "theta_12")
+    titles = ("Left Shoulder Angle", "Right Shoulder Angle", "Left Hip Angle", "Right Hip Angle")
+    for i, state in enumerate(states):
+        axs[i].plot(x_gt[:, p_idx[state]], label="GT multi-view")
+        axs[i].plot(x[:, p_idx[state]], label="single-view")
+        axs[i].set_title(titles[i])
+        axs[i].legend()
+    fig.savefig(os.path.join(os.path.dirname(fte), "states_comparison.png"))
 
 
 def get_vals_v(var: Union[pyo.Var, pyo.Param], idxs: list) -> np.ndarray:
@@ -124,7 +171,7 @@ def compare_cheetahs(test_fte_file: str,
     *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
-    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file, test2],
+    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file],
                                               scene_fname=scene_fpath,
                                               reprojections=plot_reprojections,
                                               dark_mode=True,
@@ -189,6 +236,7 @@ def run(root_dir: str,
         start_frame: int,
         end_frame: int,
         dlc_thresh: float,
+        extra_constraints: bool = True,
         loss="redescending",
         n_comps: int = 5,
         pairwise_included: int = 0,
@@ -204,9 +252,14 @@ def run(root_dir: str,
     t0 = time()
 
     if out_dir_prefix:
-        out_dir = os.path.join(out_dir_prefix, data_path, f"fte_{cam_idx}")
+        out_dir = os.path.join(out_dir_prefix, data_path, f"fte_{cam_idx}" if extra_constraints else "fte")
+        fte_dir = os.path.join(out_dir_prefix, data_path, "fte")
     else:
-        out_dir = os.path.join(root_dir, data_path, f"fte_{cam_idx}")
+        out_dir = os.path.join(root_dir, data_path, f"fte_{cam_idx}" if extra_constraints else "fte")
+        fte_dir = os.path.join(root_dir, data_path, "fte")
+
+    if extra_constraints:
+        assert os.path.exists(fte_dir)
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
@@ -624,28 +677,30 @@ def run(root_dir: str,
 
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
 
-    def motion_constraint(m, n, p):
-        if n > window_buf:
-            # Pred using LR model
-            X = [[m.x[n - w * window_time, i] for i in range(1, P + 1)] for w in range(window_size, 0, -1)]
-            y = motion_model.predict(X).tolist()
-            return m.x[n, p] - y[p - 1] - m.slack_motion[n, p] == 0.0
-        else:
-            return pyo.Constraint.Skip
+    if extra_constraints:
 
-    m.motion_constraint = pyo.Constraint(m.N, m.P, rule=motion_constraint)
+        def motion_constraint(m, n, p):
+            if n > window_buf:
+                # Pred using LR model
+                X = [[m.x[n - w * window_time, i] for i in range(1, P + 1)] for w in range(window_size, 0, -1)]
+                y = motion_model.predict(X).tolist()
+                return m.x[n, p] - y[p - 1] - m.slack_motion[n, p] == 0.0
+            else:
+                return pyo.Constraint.Skip
 
-    if not reduced_space:
+        m.motion_constraint = pyo.Constraint(m.N, m.P, rule=motion_constraint)
 
-        def reduced_pose_constraint(m, n, p):
-            # Contrain poses that are close to the reduced pose space.
-            x = [m.x[n, i] for i in range(1, P + 1)]
-            if inc_obj_vel:
-                x += [m.dx[n, i] for i in range(1, root_dim + 1)]
-            x_r = pose_model.project(pose_model.project(x), inverse=True).tolist()
-            return m.x[n, p] - x_r[p - 1] - m.slack_pose[n, p] == 0.0
+        if not reduced_space:
 
-        m.reduced_pose_constraint = pyo.Constraint(m.N, m.P, rule=reduced_pose_constraint)
+            def reduced_pose_constraint(m, n, p):
+                # Contrain poses that are close to the reduced pose space.
+                x = [m.x[n, i] for i in range(1, P + 1)]
+                if inc_obj_vel:
+                    x += [m.dx[n, i] for i in range(1, root_dim + 1)]
+                x_r = pose_model.project(pose_model.project(x), inverse=True).tolist()
+                return m.x[n, p] - x_r[p - 1] - m.slack_pose[n, p] == 0.0
+
+            m.reduced_pose_constraint = pyo.Constraint(m.N, m.P, rule=reduced_pose_constraint)
 
     # MEASUREMENT
     def measurement_constraints(m, n, l, d2, w):
@@ -822,14 +877,127 @@ def run(root_dir: str,
         app.create_labeled_videos(video_paths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
     # Calculate single view error.
-    multi_view_data = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "sd_fte", "fte.pickle"))
-    compare_traj_error(os.path.join(os.path.dirname(out_dir), f"fte_pw_{cam_idx+1}", "fte.pickle"),
-                       out_fpath,
-                       root_dir,
-                       data_path,
-                       out_dir_prefix=out_dir_prefix)
+    if extra_constraints:
+        compare_traj_error(os.path.join(fte_dir, "fte.pickle"),
+                           out_fpath,
+                           root_dir,
+                           data_path,
+                           np.squeeze(t_arr[cam_idx, :, :]),
+                           out_dir_prefix=out_dir_prefix)
 
     logger.info("Done")
+
+
+def dataset_post_process():
+    import matplotlib.pyplot as plt
+    root_dir = "/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos"
+    dir_prefix = "/Users/zico/msc/dev/AcinoSet/data"
+    tests = {
+        "2017_08_29/top/jules/run1_1": 1,
+        "2017_09_02/top/jules/run1": 1,
+        "2019_02_27/romeo/run": 2,
+        "2017_09_03/top/zorro/run1_2": 4
+    }
+    metrics = {
+        "pixels": [],
+        "full_single_traj_error": [],
+        "single_traj_error": [],
+        "single_pos_error": [],
+        "model_pos_error": [],
+        "distance": [],
+        "angle": []
+    }
+
+    def _pt3d_to_2d(x, y, z, K, D, R, t):
+        x_2d = x * R[0, 0] + y * R[0, 1] + z * R[0, 2] + t.flatten()[0]
+        y_2d = x * R[1, 0] + y * R[1, 1] + z * R[1, 2] + t.flatten()[1]
+        z_2d = x * R[2, 0] + y * R[2, 1] + z * R[2, 2] + t.flatten()[2]
+        #project onto camera plane
+        a = x_2d / z_2d
+        b = y_2d / z_2d
+        #fisheye params
+        r = (a**2 + b**2)**0.5
+        th = np.arctan(r)
+        #distortion
+        th_d = th * (1 + D[0] * th**2 + D[1] * th**4 + D[2] * th**6 + D[3] * th**8)
+        x_p = a * th_d / (r + 1e-12)
+        y_p = b * th_d / (r + 1e-12)
+        u = K[0, 0] * x_p + K[0, 2]
+        v = K[1, 1] * y_p + K[1, 2]
+        return u, v
+
+    def _get_bounding_box(x, y, axis=1):
+        x_range = np.max(x, axis=axis) - np.min(x, axis=axis)
+        y_range = np.max(y, axis=axis) - np.min(y, axis=axis)
+        return x_range, y_range
+
+    for i, data_path in enumerate(tests.keys()):
+        cam_idx = tests[data_path]
+        k_arr, d_arr, r_arr, t_arr, _, n_cams, _ = utils.find_scene_file(os.path.join(root_dir, data_path))
+        multi_view_data = data_ops.load_pickle(os.path.join(dir_prefix, data_path, "sd_fte", "fte.pickle"))
+        single_view_data = data_ops.load_pickle(os.path.join(dir_prefix, data_path, "fte", "fte.pickle"))
+        pose_model_data = data_ops.load_pickle(os.path.join(dir_prefix, data_path, f"fte_{cam_idx}", "fte.pickle"))
+
+        # Calculate head distance from the camera.
+        gt_pos = np.asarray(multi_view_data["positions"])
+        for n in range(gt_pos.shape[0]):
+            temp = []
+            for m in range(gt_pos.shape[1]):
+                [u], [v] = _pt3d_to_2d(gt_pos[n, m][0], gt_pos[n, m][1], gt_pos[n, m][2], k_arr[cam_idx],
+                                       d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx])
+                temp.append([u, v])
+            metrics["pixels"].append(temp)
+
+        # head_pos = np.asarray(multi_view_data["x"])[:, 0:3]
+        # Get camera position and change the location of the Y and Z coordinate to match the head position coordinate system.
+        # cam_pos = np.squeeze(t_arr[cam_idx, :, :])
+        # temp = cam_pos[1]
+        # cam_pos[1] = cam_pos[2]
+        # cam_pos[2] = temp
+        # cam_pos = np.tile(cam_pos, head_pos.shape[0]).reshape(head_pos.shape[0], -1)
+        # metrics["distance"].append(np.sqrt(np.sum((head_pos - cam_pos)**2, axis=1)).tolist())
+        # metrics["angle"].append(np.arctan2(cam_pos[:, 1] - head_pos[:, 1], cam_pos[:, 0] - head_pos[:, 0]).tolist())
+        # Calculate the trajectory error per bodypart.
+        single_mpjpe_mm, single_traj_error = traj_error(multi_view_data["positions"], single_view_data["positions"])
+        _, full_single_mpjpe_mm = traj_error(multi_view_data["positions"],
+                                             single_view_data["positions"],
+                                             centered=False)
+        model_mpjpe_mm, _ = traj_error(multi_view_data["positions"], pose_model_data["positions"])
+        metrics["full_single_traj_error"].append(full_single_mpjpe_mm.tolist())
+        metrics["single_traj_error"].append(single_traj_error.tolist())
+        metrics["single_pos_error"].append(single_mpjpe_mm.transpose())
+        metrics["model_pos_error"].append(model_mpjpe_mm.transpose())
+
+    single_total_error = pd.concat(metrics["single_pos_error"]).mean()
+    model_total_error = pd.concat(metrics["model_pos_error"]).mean()
+    df = pd.concat([single_total_error, model_total_error], axis=1)
+    df.columns = [
+        f"single-view ({single_total_error.mean():.2f})", f"single-view with model ({model_total_error.mean():.2f})"
+    ]
+
+    fig = plt.figure(figsize=(16, 12), dpi=120)
+    full_single_mpjpe_mm = np.array(sum(metrics["full_single_traj_error"], []))
+    # cam_distances = np.array(sum(metrics["distance"], []))
+    # cam_angles = np.array(sum(metrics["angle"], []))
+    # dist_sorted_idx = np.argsort(cam_dist)
+    # angle_sorted_idx = np.argsort(cam_angle)
+    cam_pixels = np.array(metrics["pixels"], dtype=float)
+    x_bounds, y_bounds = _get_bounding_box(cam_pixels[:, :, 0], cam_pixels[:, :, 1])
+    bounding_boxes = np.sqrt(x_bounds * y_bounds)
+    sorted_box_indices = np.argsort(bounding_boxes)
+    ax = fig.add_subplot(111)
+    ax.bar(bounding_boxes[sorted_box_indices], full_single_mpjpe_mm[sorted_box_indices])
+    ax.set_xlabel("Bounding Box Size")
+    ax.set_ylabel("Avg. Error (mm)")
+    fig.savefig("../data/bounding_box_vs_error.png")
+    plt.cla()
+
+    ax = df.plot(kind="barh")
+    fig = ax.get_figure()
+    plt.xlabel("Error (mm)")
+    plt.ylabel("Bodypart")
+    fig.savefig("../data/mpjpe_result.png")
+    plt.cla()
 
 
 def run_dataset_test():
@@ -875,4 +1043,5 @@ def run_dataset_test():
 
 
 if __name__ == "__main__":
-    run_dataset_test()
+    # run_dataset_test()
+    dataset_post_process()
