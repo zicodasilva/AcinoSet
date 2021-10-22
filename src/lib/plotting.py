@@ -209,12 +209,14 @@ class Cheetah(Animation):
                       4,20,5,20,20,21,21,22,22,23] # left back leg
 
         colours = [[self.dark_mode]*3+[1], # white if dark_mode else black
-                   [1,0,1,1],              # fuchsia/magenta
+                   [1,0,1,1],              # magenta
                    [0,1,0,1],              # green
-                   [0,0.8,0.8,1]]          # light blue
+                   [0,0.8,0.8,1],          # light blue
+                   [1,0.65,0,1],           # orange
+                   [1,1,0,1]]           # yellow
 
         self.n_reconstructions = len(multiple_reconstructions)
-        assert self.n_reconstructions < 5, 'Cannot plot more than 4 reconstructions at a time'
+        assert self.n_reconstructions < 7, 'Cannot plot more than 4 reconstructions at a time'
         self.n_frames = len(multiple_reconstructions[0])
         self.frame = 0
         self.vector_frames = []
