@@ -302,27 +302,7 @@ def run(root_dir: str,
     assert 0 != end_frame <= num_frames, f"end_frame must be less than or equal to {num_frames}"
     assert 0 <= dlc_thresh <= 1, "dlc_thresh must be from 0 to 1"
 
-    if end_frame == -1:
-        # Automatically set start and end frame
-        # defining the first and end frame as detecting all the markers on any of cameras simultaneously
-        target_markers = misc.get_markers()
-        markers_condition = " or ".join([f"marker=='{ref}'" for ref in target_markers])
-        num_marker = lambda i: len(
-            filtered_points_2d_df.query(f"frame == {i} and ({markers_condition})")["marker"].unique())
-
-        start_frame, end_frame = -1, -1
-        max_idx = points_2d_df["frame"].max() + 1
-        for i in range(max_idx):
-            if num_marker(i) == len(target_markers):
-                start_frame = i
-                break
-        for i in range(max_idx, 0, -1):
-            if num_marker(i) == len(target_markers):
-                end_frame = i
-                break
-        if start_frame == -1 or end_frame == -1:
-            raise Exception("Setting frames failed. Please define start and end frames manually.")
-    elif start_frame == -1:
+    if start_frame == -1:
         # Use the entire video.
         start_frame = 1
         end_frame = num_frames
@@ -334,12 +314,10 @@ def run(root_dir: str,
 
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
-
     # Check that we have a valid range of frames - if not perform the entire sequence.
     if N == 0:
         end_frame = num_frames
         N = end_frame - start_frame
-
     # For memory reasons - do not perform optimisation on trajectories larger than 200 points.
     if N > 200:
         end_frame = start_frame + 200
