@@ -446,7 +446,7 @@ def run(root_dir: str,
     # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
     frame_est = np.arange(end_frame)
 
-    nose_pts_2d = filtered_points_2d_df.query('marker == "nose"')[['x', 'y']].to_numpy(dtype=np.float32)
+    nose_pts_2d = filtered_points_2d_df.query("marker == 'nose'")[["x", "y"]].to_numpy(dtype=np.float32)
     X_w = triangulate_points_single_img(nose_pts_2d[:end_frame], 3, k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx],
                                         t_arr[cam_idx])
     nose_pts = np.vstack((frame_est, X_w)).T
@@ -536,7 +536,7 @@ def run(root_dir: str,
         # Determine if the current measurement is the base prediction or a pairwise prediction.
         marker = markers[l - 1]
         values = pw_data[(n - 1) + start_frame]
-        likelihoods = values['pose'][2::3]
+        likelihoods = values["pose"][2::3]
         if w < 2:
             base = index_dict[marker]
             likelihoods = base_data[(n - 1) + start_frame][2::3]
@@ -567,9 +567,9 @@ def run(root_dir: str,
         else:
             try:
                 values = pw_data[(n - 1) + start_frame]
-                val = values['pose'][d2 - 1::3]
+                val = values["pose"][d2 - 1::3]
                 base = pair_dict[marker][w - 2]
-                val_pw = values['pws'][:, :, :, d2 - 1]
+                val_pw = values["pws"][:, :, :, d2 - 1]
                 return val[base] + val_pw[0, base, index_dict[marker]]
             except IndexError:
                 return 0.0
