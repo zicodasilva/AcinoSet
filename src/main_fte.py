@@ -13,7 +13,7 @@ from scipy.interpolate import UnivariateSpline
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 from lib import misc, utils, app
-from lib.calib import triangulate_points_fisheye, project_points_fisheye
+from lib.calib import project_points_fisheye, triangulate_points_single_img
 from lib.models import PoseModel, MotionModel
 
 from py_utils import data_ops, log
@@ -269,6 +269,7 @@ def run(root_dir: str,
 
     app.start_logging(os.path.join(out_dir, "fte.log"))
 
+    logger.info("Load data")
     # ========= IMPORT CAMERA & SCENE PARAMS ========
     try:
         k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
@@ -289,8 +290,17 @@ def run(root_dir: str,
     dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
     assert n_cams == len(dlc_points_fpaths), f"# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json"
 
-    # load measurement dataframe (pixels, likelihood)
-    points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
+    # Load measurement data.
+    df_paths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
+    h5_filename = os.path.basename(df_paths[cam_idx])
+    pw_data = data_ops.load_pickle(
+        os.path.join(dlc_dir, f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
+    points_2d_df = pd.read_hdf(os.path.join(dlc_dir, h5_filename))
+    base_data = list(points_2d_df.to_numpy())
+    # Re-organise data to make for easy selection of data in the dataframe.
+    points_2d_df = points_2d_df.droplevel([0], axis=1).swaplevel(0,1,axis=1).T.unstack().T.reset_index().rename({"level_0":"frame"}, axis=1)
+    points_2d_df.columns.name = ""
+    points_2d_df.rename(columns={"bodyparts": "marker"}, inplace=True)
     filtered_points_2d_df = points_2d_df[points_2d_df["likelihood"] > dlc_thresh]  # ignore points with low likelihood
 
     if platform.python_implementation() == "PyPy":
@@ -310,7 +320,6 @@ def run(root_dir: str,
         # User-defined frames
         start_frame = start_frame - 1  # 0 based indexing
         end_frame = end_frame % num_frames + 1 if end_frame == -1 else end_frame
-    assert len(k_arr) == points_2d_df["camera"].nunique()
 
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
@@ -431,21 +440,16 @@ def run(root_dir: str,
         132,  # l_back_ankle
         132  # r_back_ankle
     ])**2
-    #===================================================
-    #                   Load in data
-    #===================================================
-    logger.info("Load H5 2D DLC prediction data")
-    df_paths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
 
-    points_3d_df = utils.get_pairwise_3d_points_from_df(filtered_points_2d_df, k_arr, d_arr, r_arr, t_arr,
-                                                        triangulate_points_fisheye)
-
-    # estimate initial points
+    # Estimate initial points
     logger.info("Estimate the initial trajectory")
     # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
     frame_est = np.arange(end_frame)
 
-    nose_pts = points_3d_df[points_3d_df["marker"] == "nose"][["frame", "x", "y", "z"]].values
+    nose_pts_2d = filtered_points_2d_df.query('marker == "nose"')[['x', 'y']].to_numpy(dtype=np.float32)
+    X_w = triangulate_points_single_img(nose_pts_2d[:end_frame], 3, k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx],
+                                        t_arr[cam_idx])
+    nose_pts = np.vstack((frame_est, X_w)).T
     nose_pts[:, 1] = nose_pts[:, 1] - 0.055
     nose_pts[:, 3] = nose_pts[:, 3] + 0.055
     traj_est_x = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 1])
@@ -461,11 +465,6 @@ def run(root_dir: str,
     psi_est = np.arctan2(dy_est, dx_est)
     # Duplicate the last heading estimate as the difference calculation returns N-1.
     psi_est = np.append(psi_est, [psi_est[-1]])
-
-    # Remove datafames from memory to conserve memory usage.
-    del points_2d_df
-    del filtered_points_2d_df
-    del points_3d_df
 
     # Pairwise correspondence data.
     h5_filename = os.path.basename(df_paths[cam_idx])
