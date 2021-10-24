@@ -298,7 +298,8 @@ def run(root_dir: str,
     points_2d_df = pd.read_hdf(os.path.join(dlc_dir, h5_filename))
     base_data = list(points_2d_df.to_numpy())
     # Re-organise data to make for easy selection of data in the dataframe.
-    points_2d_df = points_2d_df.droplevel([0], axis=1).swaplevel(0,1,axis=1).T.unstack().T.reset_index().rename({"level_0":"frame"}, axis=1)
+    points_2d_df = points_2d_df.droplevel([0], axis=1).swaplevel(0, 1, axis=1).T.unstack().T.reset_index().rename(
+        {"level_0": "frame"}, axis=1)
     points_2d_df.columns.name = ""
     points_2d_df.rename(columns={"bodyparts": "marker"}, inplace=True)
     filtered_points_2d_df = points_2d_df[points_2d_df["likelihood"] > dlc_thresh]  # ignore points with low likelihood
@@ -756,7 +757,7 @@ def run(root_dir: str,
                                                  rule=lambda m, n:
                                                  (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_17"])], 0))
 
-    logger.info("Constaint initialisation...Done")
+    logger.info("Constraint initialisation...Done")
 
     # ======= OBJECTIVE FUNCTION =======
     def obj(m):
