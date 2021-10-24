@@ -3,8 +3,7 @@ import numpy as np
 import pandas as pd
 
 from sklearn.linear_model import LinearRegression, MultiTaskLasso
-from sklearn.model_selection import train_test_split
-from sklearn import metrics, preprocessing
+from sklearn import metrics
 
 from lib import misc
 
@@ -188,19 +187,16 @@ class MotionModel:
         xy_set = df_input.to_numpy()
         X = xy_set[:, 0:(num_params * window_size)]
         y = xy_set[:, (num_params * window_size):]
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
-        logger.info(f"Motion model X_train: {X_train.shape}, y_train: {y_train.shape}")
-        logger.info(f"Motion model X_test: {X_test.shape}, y_test: {y_test.shape}")
-        self.lr_model.fit(X_train, y_train)
-        y_pred = self.lr_model.predict(X_test)
+        self.lr_model.fit(X, y)
+        y_pred = self.lr_model.predict(X)
         logger.info(f"Number of non-zero parameters in LR model: {np.count_nonzero(self.lr_model.coef_)}")
 
         # Determine the error for the test set.
-        residuals = y_test - y_pred
+        residuals = y - y_pred
         self.error_variance = np.var(residuals, axis=0)
-        self.rmse = metrics.mean_squared_error(y_test, y_pred, squared=False)
-        explained_variance = metrics.explained_variance_score(y_test, y_pred)
-        max_error = metrics.max_error(y_test.flatten(), y_pred.flatten())
+        self.rmse = metrics.mean_squared_error(y, y_pred, squared=False)
+        explained_variance = metrics.explained_variance_score(y, y_pred)
+        max_error = metrics.max_error(y.flatten(), y_pred.flatten())
 
         logger.info(
             f"Model RMSE: {self.rmse:.6f}, Max Error: {max_error:.6f}, Explained variance: {100*explained_variance:.2f}%"
