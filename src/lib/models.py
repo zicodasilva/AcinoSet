@@ -50,6 +50,7 @@ def generate_xy_dataset(data: pd.DataFrame,
 class PoseModel:
     def __init__(self, dataset_fname: str, pose_params: dict, ext_dim: int, n_comps: int, standardise: bool = False):
         self.p_idx = pose_params
+        self.n_comps = n_comps
         self.num_vars = len(pose_params.keys())
         self.ext_dim = ext_dim
         self.standardise = standardise
@@ -164,21 +165,25 @@ class MotionModel:
                  num_params: int,
                  start_idx: int = 0,
                  window_size: int = 10,
-                 window_time: int = 1):
+                 window_time: int = 1,
+                 pose_model: PoseModel = None):
         # Preprocessing step to prepare the dataset for Linear Regression fit.
         self.window_size = window_size
         self.window_time = window_time
         df = pd.read_hdf(dataset_fname)
         idx = np.where(df.index.values == 0)[0]
-        df_in = df.iloc[:, start_idx:start_idx + num_params]
+        data_in = df.iloc[:, start_idx:start_idx + num_params].to_numpy()
+        if pose_model:
+            data_in = pose_model.project(data_in)
+            num_params = pose_model.n_comps + pose_model.ext_dim
         df_list = []
         end_segment = 0
         for begin_segment, end_segment in zip(idx, idx[1:]):
             df_list.append(
-                data_ops.series_to_supervised(df_in.iloc[begin_segment:end_segment],
+                data_ops.series_to_supervised(data_in[begin_segment:end_segment, :],
                                               n_in=window_size,
                                               n_step=window_time))
-        df_list.append(data_ops.series_to_supervised(df_in.iloc[end_segment:], n_in=window_size, n_step=window_time))
+        df_list.append(data_ops.series_to_supervised(data_in[end_segment:, :], n_in=window_size, n_step=window_time))
         df_input = pd.concat(df_list)
 
         # Instantiate the LR model and split the dataset into train and test sets.

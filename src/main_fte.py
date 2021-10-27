@@ -44,7 +44,6 @@ def compare_traj_error(fte_orig: str,
                        fte: str,
                        root_dir: str,
                        data_dir: str,
-                       cam_pos: np.ndarray,
                        fte_type: str = "sd_fte",
                        out_dir_prefix: str = None) -> None:
     import matplotlib.pyplot as plt
@@ -527,7 +526,8 @@ def run(root_dir: str,
     motion_model = MotionModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_runs.h5",
                                P,
                                window_size=window_size,
-                               window_time=window_time)
+                               window_time=window_time,
+                               pose_model=pose_model if reduced_space else None)
     pred_var = 0.5 * motion_model.error_variance
 
     if reduced_space:
@@ -660,7 +660,7 @@ def run(root_dir: str,
         def motion_constraint(m, n, p):
             if n > window_buf:
                 # Pred using LR model
-                X = [[m.x[n - w * window_time, i] for i in range(1, P + 1)] for w in range(window_size, 0, -1)]
+                X = [[m.x[n - w * window_time, i] for i in m.P] for w in range(window_size, 0, -1)]
                 y = motion_model.predict(X).tolist()
                 return m.x[n, p] - y[p - 1] - m.slack_motion[n, p] == 0.0
             else:
@@ -789,7 +789,7 @@ def run(root_dir: str,
         )
         # solver options
         opt.options["print_level"] = 5
-        opt.options["max_iter"] = 400
+        opt.options["max_iter"] = 1000
         opt.options["max_cpu_time"] = 10000
         opt.options["Tol"] = 1e-1
         opt.options["OF_print_timing_statistics"] = "yes"
@@ -813,13 +813,13 @@ def run(root_dir: str,
     logger.info("Generate outputs...")
 
     # ===== SAVE FTE RESULTS =====
-    x_optimised = get_vals_v(m.x, [m.N, m.P])
+    if reduced_space:
+        x_optimised = pose_model.project(get_vals_v(m.x, [m.N, m.P]), inverse=True)
+    else:
+        x_optimised = get_vals_v(m.x, [m.N, m.P])
     dx_optimised = get_vals_v(m.dx, [m.N, m.P])
     ddx_optimised = get_vals_v(m.ddx, [m.N, m.P])
-    if reduced_space:
-        positions = [pose_to_3d(*states) for states in pose_model.project(x_optimised, inverse=True)]
-    else:
-        positions = [pose_to_3d(*states) for states in x_optimised]
+    positions = [pose_to_3d(*states) for states in x_optimised]
     model_weight = get_vals_v(m.model_err_weight, [m.P])
     model_err = get_vals_v(m.slack_model, [m.N, m.P])
     pose_err = get_vals_v(m.slack_pose, [m.N, m.P])
@@ -860,7 +860,6 @@ def run(root_dir: str,
                            out_fpath,
                            root_dir,
                            data_path,
-                           np.squeeze(t_arr[cam_idx, :, :]),
                            out_dir_prefix=out_dir_prefix)
 
     logger.info("Done")
@@ -926,15 +925,6 @@ def dataset_post_process():
                 temp.append([u, v])
             metrics["pixels"].append(temp)
 
-        # head_pos = np.asarray(multi_view_data["x"])[:, 0:3]
-        # Get camera position and change the location of the Y and Z coordinate to match the head position coordinate system.
-        # cam_pos = np.squeeze(t_arr[cam_idx, :, :])
-        # temp = cam_pos[1]
-        # cam_pos[1] = cam_pos[2]
-        # cam_pos[2] = temp
-        # cam_pos = np.tile(cam_pos, head_pos.shape[0]).reshape(head_pos.shape[0], -1)
-        # metrics["distance"].append(np.sqrt(np.sum((head_pos - cam_pos)**2, axis=1)).tolist())
-        # metrics["angle"].append(np.arctan2(cam_pos[:, 1] - head_pos[:, 1], cam_pos[:, 0] - head_pos[:, 0]).tolist())
         # Calculate the trajectory error per bodypart.
         single_mpjpe_mm, single_traj_error = traj_error(multi_view_data["positions"], single_view_data["positions"])
         _, full_single_mpjpe_mm = traj_error(multi_view_data["positions"],
@@ -955,10 +945,6 @@ def dataset_post_process():
 
     fig = plt.figure(figsize=(16, 12), dpi=120)
     full_single_mpjpe_mm = np.array(sum(metrics["full_single_traj_error"], []))
-    # cam_distances = np.array(sum(metrics["distance"], []))
-    # cam_angles = np.array(sum(metrics["angle"], []))
-    # dist_sorted_idx = np.argsort(cam_dist)
-    # angle_sorted_idx = np.argsort(cam_angle)
     cam_pixels = np.array(metrics["pixels"], dtype=float)
     x_bounds, y_bounds = _get_bounding_box(cam_pixels[:, :, 0], cam_pixels[:, :, 1])
     bounding_boxes = np.sqrt(x_bounds * y_bounds)
