@@ -22,6 +22,17 @@ from py_utils import data_ops, log
 logger = log.logger(__name__)
 
 
+def plot_init_traj(out_dir: str, x_points: np.ndarray, y_points: np.ndarray):
+    import matplotlib.pyplot as plt
+    fig = plt.figure(figsize=(16, 12), dpi=120)
+    plt.plot(x_points, y_points)
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.ylim((0, 12))
+    fig.savefig(os.path.join(out_dir, "init_traj.png"))
+    plt.close()
+
+
 def traj_error(X: np.ndarray, Y: np.ndarray, centered: bool = True) -> Tuple[pd.DataFrame, np.ndarray]:
     X = np.asarray(X)
     Y = np.asarray(Y)
@@ -82,9 +93,9 @@ def compare_traj_error(fte_orig: str,
     plt.plot(pts_3d_spine_multi[:, 0], pts_3d_spine_multi[:, 1], label="multi-view")
     plt.plot(pts_3d_spine_orig[:, 0], pts_3d_spine_orig[:, 1], label="single-view")
     plt.plot(pts_3d_spine[:, 0], pts_3d_spine[:, 1], label="single-view with pose constraints")
-    plt.xlabel("Time")
-    plt.ylabel("Positions (m)")
-    plt.ylim((0, 7))
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.ylim((0, 12))
     ax = plt.gca()
     ax.legend()
     fig.savefig(os.path.join(os.path.dirname(fte), "x_y_positions.png"))
@@ -235,6 +246,7 @@ def run(root_dir: str,
         start_frame: int,
         end_frame: int,
         dlc_thresh: float,
+        fte_type: str = "sd_fte",
         extra_constraints: bool = True,
         loss="redescending",
         n_comps: int = 5,
@@ -301,7 +313,6 @@ def run(root_dir: str,
         {"level_0": "frame"}, axis=1)
     points_2d_df.columns.name = ""
     points_2d_df.rename(columns={"bodyparts": "marker"}, inplace=True)
-    filtered_points_2d_df = points_2d_df[points_2d_df["likelihood"] > dlc_thresh]  # ignore points with low likelihood
 
     if platform.python_implementation() == "PyPy":
         # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
@@ -444,20 +455,24 @@ def run(root_dir: str,
     # Estimate initial points
     logger.info("Estimate the initial trajectory")
     # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
-    frame_est = np.arange(end_frame)
+    frame_range = np.arange(num_frames, dtype=int)
 
-    nose_pts_2d = filtered_points_2d_df.query("marker == 'nose'")[["x", "y"]].to_numpy(dtype=np.float32)
-    X_w = triangulate_points_single_img(nose_pts_2d[:end_frame], 3, k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx],
-                                        t_arr[cam_idx])
-    nose_pts = np.vstack((frame_est, X_w)).T
-    nose_pts[:, 1] = nose_pts[:, 1] - 0.055
-    nose_pts[:, 3] = nose_pts[:, 3] + 0.055
-    traj_est_x = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 1])
-    traj_est_y = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 2])
-    traj_est_z = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 3])
-    x_est = np.array(traj_est_x(frame_est))
-    y_est = np.array(traj_est_y(frame_est))
-    z_est = np.array(traj_est_z(frame_est))
+    points_2d_df.loc[points_2d_df["likelihood"] <= dlc_thresh, ["x", "y"]] = np.nan  # ignore points with low likelihood
+    nose_pts_2d = points_2d_df.query("marker == 'nose'")[["x", "y"]].to_numpy(dtype=np.float32)
+    X_w = triangulate_points_single_img(nose_pts_2d, 3, k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx],
+                                        t_arr[cam_idx]).T
+    w = np.isnan(X_w[:, 0])
+    X_w[w, 0] = 0.0
+    x_est = np.array(UnivariateSpline(frame_range, X_w[:, 0], w=~w)(frame_range))
+    w = np.isnan(X_w[:, 1])
+    X_w[w, 1] = 0.0
+    y_est = np.array(UnivariateSpline(frame_range, X_w[:, 1], w=~w)(frame_range))
+    w = np.isnan(X_w[:, 2])
+    X_w[w, 2] = 0.0
+    z_est = np.array(UnivariateSpline(frame_range, X_w[:, 2], w=~w)(frame_range))
+
+    # Plot the initial trajectory on the XY plane to validate the single view initial trajectory is valid.
+    plot_init_traj(out_dir, x_est, y_est)
 
     # Calculate the initial yaw.
     dx_est = np.diff(x_est) / Ts
@@ -488,8 +503,8 @@ def run(root_dir: str,
         ext_dim = 4
     else:
         ext_dim = 6
-    window_size = 5
-    window_time = 2
+    window_size = 10
+    window_time = 1
     window_buf = window_size * window_time
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts
@@ -593,7 +608,7 @@ def run(root_dir: str,
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
     if init_fte:
-        fte_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "sd_fte", "fte.pickle"))
+        fte_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), fte_type, "fte.pickle"))
         init_x = fte_states["x"]
         init_dx = fte_states["dx"]
         init_ddx = fte_states["ddx"]
@@ -860,6 +875,7 @@ def run(root_dir: str,
                            out_fpath,
                            root_dir,
                            data_path,
+                           fte_type=fte_type,
                            out_dir_prefix=out_dir_prefix)
 
     logger.info("Done")
@@ -884,6 +900,7 @@ def dataset_post_process():
         "distance": [],
         "angle": []
     }
+    markers = misc.get_markers()
 
     def _pt3d_to_2d(x, y, z, K, D, R, t):
         x_2d = x * R[0, 0] + y * R[0, 1] + z * R[0, 2] + t.flatten()[0]
@@ -908,22 +925,45 @@ def dataset_post_process():
         y_range = np.max(y, axis=axis) - np.min(y, axis=axis)
         return x_range, y_range
 
+    def _moving_average(a, n=9):
+        ret = np.cumsum(a, dtype=float)
+        ret[n:] = ret[n:] - ret[:-n]
+        return np.concatenate((np.zeros(n - 1), ret[n - 1:] / n))
+
+    points_dfs = []
     for i, data_path in enumerate(tests.keys()):
         cam_idx = tests[data_path]
+        # Read the scene data file and the reconstruction data.
         k_arr, d_arr, r_arr, t_arr, _, n_cams, _ = utils.find_scene_file(os.path.join(root_dir, data_path))
         multi_view_data = data_ops.load_pickle(os.path.join(dir_prefix, data_path, "sd_fte", "fte.pickle"))
         single_view_data = data_ops.load_pickle(os.path.join(dir_prefix, data_path, "fte", "fte.pickle"))
         pose_model_data = data_ops.load_pickle(os.path.join(dir_prefix, data_path, f"fte_{cam_idx}", "fte.pickle"))
 
+        # Read the camera 2D measurements.
+        df_paths = sorted(glob(os.path.join(os.path.join(root_dir, data_path, "dlc_pw"), "*.h5")))
+        h5_filename = os.path.basename(df_paths[cam_idx])
+        points_2d_df = pd.read_hdf(os.path.join(os.path.join(root_dir, data_path, "dlc_pw", h5_filename)))
+        # Re-organise data to make for easy selection of data in the dataframe.
+        points_2d_df = points_2d_df.droplevel([0], axis=1).swaplevel(0, 1, axis=1).T.unstack().T.reset_index().rename(
+            {"level_0": "frame"}, axis=1)
+        points_2d_df.columns.name = ""
+        points_2d_df.rename(columns={"bodyparts": "marker"}, inplace=True)
+        # filtered_points_2d_df = points_2d_df[points_2d_df["likelihood"] > 0.8]  # ignore points with low likelihood
+        points_2d_df.loc[points_2d_df["likelihood"] <= 0.8, ["x", "y"]] = np.nan
+        points_2d_df = points_2d_df[points_2d_df.marker != "lure"]
+        start_frame = multi_view_data['start_frame']
+        end_frame = multi_view_data['start_frame'] + len(multi_view_data['positions'])
+        points_2d = points_2d_df.query(f"{start_frame} <= frame < {end_frame}")
+        points_2d = points_2d.assign(test=data_path)
+        points_dfs.append(points_2d)
+
         # Calculate head distance from the camera.
         gt_pos = np.asarray(multi_view_data["positions"])
         for n in range(gt_pos.shape[0]):
-            temp = []
-            for m in range(gt_pos.shape[1]):
-                [u], [v] = _pt3d_to_2d(gt_pos[n, m][0], gt_pos[n, m][1], gt_pos[n, m][2], k_arr[cam_idx],
+            for m_idx, m in enumerate(markers):
+                [u], [v] = _pt3d_to_2d(gt_pos[n, m_idx][0], gt_pos[n, m_idx][1], gt_pos[n, m_idx][2], k_arr[cam_idx],
                                        d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx])
-                temp.append([u, v])
-            metrics["pixels"].append(temp)
+                metrics["pixels"].append({"test": data_path, "frame": start_frame + n, "marker": m, "x": u, "y": v})
 
         # Calculate the trajectory error per bodypart.
         single_mpjpe_mm, single_traj_error = traj_error(multi_view_data["positions"], single_view_data["positions"])
@@ -945,14 +985,55 @@ def dataset_post_process():
 
     fig = plt.figure(figsize=(16, 12), dpi=120)
     full_single_mpjpe_mm = np.array(sum(metrics["full_single_traj_error"], []))
-    cam_pixels = np.array(metrics["pixels"], dtype=float)
-    x_bounds, y_bounds = _get_bounding_box(cam_pixels[:, :, 0], cam_pixels[:, :, 1])
+    temp = pd.DataFrame.from_dict(metrics["pixels"])
+    temp2 = pd.concat(points_dfs, ignore_index=True)
+
+    error_dfs = []
+    for data_path in list(tests.keys()):
+        df1 = temp.query(f"test == '{data_path}'").sort_values(by=['frame'])
+        df2 = temp2.query(f"test == '{data_path}'").sort_values(by=['frame'])
+        valid_frames = np.intersect1d(df1['frame'].to_numpy(), df2['frame'].to_numpy())
+        for m in markers:
+            # extract frames
+            q = f'marker == "{m}"'
+            pts_1_df = df1.query(q)
+            pts_2_df = df2.query(q)
+            pts_1_df = pts_1_df[pts_1_df['frame'].isin(valid_frames)].sort_values(by=['frame'])
+            pts_2_df = pts_2_df[pts_2_df['frame'].isin(valid_frames)].sort_values(by=['frame'])
+
+            # get 2d and reprojected points
+            pts_1 = pts_1_df[['x', 'y']].to_numpy()
+            pts_2 = pts_2_df[['x', 'y']].to_numpy()
+
+            # compare both types of points
+            residual = np.sqrt(np.sum((pts_1 - pts_2)**2, axis=1))
+            # make the result dataframe
+            marker_arr = np.array([m] * len(valid_frames))
+            error_dfs.append(
+                pd.DataFrame(np.vstack((valid_frames, marker_arr, residual)).T,
+                             columns=['frame', 'marker', 'pixel_residual']))
+
+    result_df = pd.concat(error_dfs, ignore_index=True) if len(error_dfs) > 0 else pd.DataFrame(
+        columns=['frame', 'marker', 'pixel_residual'])
+    gt_2d = result_df["pixel_residual"].to_numpy(dtype=float).reshape((-1, len(markers)))
+    mean_gt_2d = np.mean(gt_2d, axis=1)
+    num_nans = np.count_nonzero(np.isnan(gt_2d), axis=1)
+    cam_px = temp[["x", "y"]].to_numpy(dtype=float).reshape((-1, len(markers), 2))
+    x_bounds, y_bounds = _get_bounding_box(cam_px[:, :, 0], cam_px[:, :, 1])
     bounding_boxes = np.sqrt(x_bounds * y_bounds)
     sorted_box_indices = np.argsort(bounding_boxes)
-    ax = fig.add_subplot(111)
+    ax = fig.add_subplot(131)
     ax.bar(bounding_boxes[sorted_box_indices], full_single_mpjpe_mm[sorted_box_indices])
     ax.set_xlabel("Bounding Box Size")
-    ax.set_ylabel("Avg. Error (mm)")
+    ax.set_ylabel("Avg. 3D Error (mm)")
+    ax = fig.add_subplot(132)
+    ax.bar(bounding_boxes[sorted_box_indices], mean_gt_2d[sorted_box_indices])
+    ax.set_xlabel("Bounding Box Size")
+    ax.set_ylabel("Avg. Reprojection Error (px)")
+    ax = fig.add_subplot(133)
+    ax.plot(bounding_boxes[sorted_box_indices], num_nans[sorted_box_indices])
+    ax.set_xlabel("Bounding Box Size")
+    ax.set_ylabel("# of Missing Measurements")
     fig.savefig("../data/bounding_box_vs_error.png")
     plt.cla()
 

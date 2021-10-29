@@ -61,7 +61,7 @@ def triangulate_points(img_pts_1, img_pts_2, k1, d1, r1, t1, k2, d2, r2, t2):
     pts_3d = (pts_4d[:3] / pts_4d[3]).T
     return pts_3d
 
-def triangulate_points_single_img(img_pts, dist_to_plane, K, D, R, t):
+def triangulate_points_single_img(img_pts, dist_to_plane, K, D, R, t) -> np.ndarray:
     pts = img_pts.reshape((-1, 1, 2))
     norm_pts = cv.fisheye.undistortPoints(pts, K, D)
     norm_pts = norm_pts.reshape((-1, 2))

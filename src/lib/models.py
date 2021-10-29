@@ -187,8 +187,8 @@ class MotionModel:
         df_input = pd.concat(df_list)
 
         # Instantiate the LR model and split the dataset into train and test sets.
-        self.lr_model = LinearRegression()
-        # self.lr_model = MultiTaskLasso(alpha=1e-4, random_state=42, max_iter=15000)
+        # self.lr_model = LinearRegression()
+        self.lr_model = MultiTaskLasso(alpha=1e-4, random_state=42, max_iter=15000)
         xy_set = df_input.to_numpy()
         X = xy_set[:, 0:(num_params * window_size)]
         y = xy_set[:, (num_params * window_size):]
