@@ -460,16 +460,16 @@ def run(root_dir: str,
     points_2d_df.loc[points_2d_df["likelihood"] <= dlc_thresh, ["x", "y"]] = np.nan  # ignore points with low likelihood
     nose_pts_2d = points_2d_df.query("marker == 'nose'")[["x", "y"]].to_numpy(dtype=np.float32)
     X_w = triangulate_points_single_img(nose_pts_2d, 3, k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx],
-                                        t_arr[cam_idx]).T
-    w = np.isnan(X_w[:, 0])
-    X_w[w, 0] = 0.0
-    x_est = np.array(UnivariateSpline(frame_range, X_w[:, 0], w=~w)(frame_range))
-    w = np.isnan(X_w[:, 1])
-    X_w[w, 1] = 0.0
-    y_est = np.array(UnivariateSpline(frame_range, X_w[:, 1], w=~w)(frame_range))
-    w = np.isnan(X_w[:, 2])
-    X_w[w, 2] = 0.0
-    z_est = np.array(UnivariateSpline(frame_range, X_w[:, 2], w=~w)(frame_range))
+                                        t_arr[cam_idx])
+    w = np.isnan(X_w[0, :])
+    X_w[0, w] = 0.0
+    x_est = np.array(UnivariateSpline(frame_range, X_w[0, :], w=~w)(frame_range))
+    w = np.isnan(X_w[1, :])
+    X_w[1, w] = 0.0
+    y_est = np.array(UnivariateSpline(frame_range, X_w[1, :], w=~w)(frame_range))
+    w = np.isnan(X_w[2, :])
+    X_w[2, w] = 0.0
+    z_est = np.array(UnivariateSpline(frame_range, X_w[2, :], w=~w)(frame_range))
 
     # Plot the initial trajectory on the XY plane to validate the single view initial trajectory is valid.
     plot_init_traj(out_dir, x_est, y_est)
@@ -542,6 +542,7 @@ def run(root_dir: str,
                                P,
                                window_size=window_size,
                                window_time=window_time,
+                               lasso=True,
                                pose_model=pose_model if reduced_space else None)
     pred_var = 0.5 * motion_model.error_variance
 

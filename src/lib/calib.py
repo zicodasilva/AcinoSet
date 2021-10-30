@@ -61,7 +61,8 @@ def triangulate_points(img_pts_1, img_pts_2, k1, d1, r1, t1, k2, d2, r2, t2):
     pts_3d = (pts_4d[:3] / pts_4d[3]).T
     return pts_3d
 
-def triangulate_points_single_img(img_pts, dist_to_plane, K, D, R, t) -> np.ndarray:
+
+def triangulate_points_single_img(img_pts, dist_to_plane, K, D, R, t) -> Array[np.float32, 3, ...]:
     pts = img_pts.reshape((-1, 1, 2))
     norm_pts = cv.fisheye.undistortPoints(pts, K, D)
     norm_pts = norm_pts.reshape((-1, 2))
@@ -197,7 +198,7 @@ def fix_skew_scene(cams, r_arr, t_arr, ave_cam_height=0.5):
     # seperate cams list into side 1 & 2
     cam_sets = [list(filter(lambda x: x<4, cams)), list(filter(lambda x: x>3, cams))]
     cam_sets_len = np.array([len(cam_sets[0]),len(cam_sets[1])])
-     # check if one of the cam sets have more than 1 cam
+    # check if one of the cam sets have more than 1 cam
     idx = np.where(cam_sets_len > 1)[0]
     if len(idx):
         # get cams on the one side of the scene that forms a line

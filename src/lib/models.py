@@ -1,3 +1,4 @@
+import os
 from typing import Union, Tuple
 import numpy as np
 import pandas as pd
@@ -48,7 +49,13 @@ def generate_xy_dataset(data: pd.DataFrame,
 
 
 class PoseModel:
-    def __init__(self, dataset_fname: str, pose_params: dict, ext_dim: int, n_comps: int, standardise: bool = False):
+    def __init__(self,
+                 dataset_fname: str,
+                 pose_params: dict,
+                 ext_dim: int,
+                 n_comps: int,
+                 standardise: bool = False,
+                 verbose: bool = False):
         self.p_idx = pose_params
         self.n_comps = n_comps
         self.num_vars = len(pose_params.keys())
@@ -104,14 +111,18 @@ class PoseModel:
         var = np.var(X_orig[:, self.ext_dim:] - X1, axis=0)
         self.error_variance[self.included_vars] = var
 
-        reconstructed_states = np.concatenate((X_orig[:, :self.ext_dim], X1), axis=1)
-        positions_orig = np.array([misc.get_3d_marker_coords(pose) for pose in X_orig])
-        positions_pca = np.array([misc.get_3d_marker_coords(pose) for pose in reconstructed_states])
-        position_diff = (positions_orig - positions_pca)
-        mpjpe_mm = np.mean(np.sqrt(np.sum(position_diff**2, axis=2)), axis=0) * 1000.0
-        logger.info(
-            f'PCA trained for {n_comps} components ({np.round(100.0 * variance_explained[n_comps - 1], 2)}%) with reconstruction error [mm]: {mpjpe_mm.mean(axis=0).round(4)}'
-        )
+        if verbose:
+            reconstructed_states = np.concatenate((X_orig[:, :self.ext_dim], X1), axis=1)
+            positions_orig = np.array([misc.get_3d_marker_coords(pose) for pose in X_orig])
+            positions_pca = np.array([misc.get_3d_marker_coords(pose) for pose in reconstructed_states])
+            position_diff = (positions_orig - positions_pca)
+            mpjpe_mm = np.mean(np.sqrt(np.sum(position_diff**2, axis=2)), axis=0) * 1000.0
+            logger.info(
+                f'PCA trained for {n_comps} components ({np.round(100.0 * variance_explained[n_comps - 1], 2)}%) with reconstruction error [mm]: {mpjpe_mm.mean(axis=0).round(4)}'
+            )
+        else:
+            logger.info(
+                f'PCA trained for {n_comps} components ({np.round(100.0 * variance_explained[n_comps - 1], 2)}%)')
 
     def pc_std(self):
         return np.std(self.PC, axis=0)
@@ -166,6 +177,7 @@ class MotionModel:
                  start_idx: int = 0,
                  window_size: int = 10,
                  window_time: int = 1,
+                 lasso: bool = True,
                  pose_model: PoseModel = None):
         # Preprocessing step to prepare the dataset for Linear Regression fit.
         self.window_size = window_size
@@ -185,14 +197,22 @@ class MotionModel:
                                               n_step=window_time))
         df_list.append(data_ops.series_to_supervised(data_in[end_segment:, :], n_in=window_size, n_step=window_time))
         df_input = pd.concat(df_list)
-
-        # Instantiate the LR model and split the dataset into train and test sets.
-        # self.lr_model = LinearRegression()
-        self.lr_model = MultiTaskLasso(alpha=1e-4, random_state=42, max_iter=15000)
         xy_set = df_input.to_numpy()
         X = xy_set[:, 0:(num_params * window_size)]
         y = xy_set[:, (num_params * window_size):]
-        self.lr_model.fit(X, y)
+
+        object_uid = hash((num_params, start_idx, window_size, window_time, lasso, True if pose_model else False))
+        model_fname = os.path.join(os.path.dirname(dataset_fname), f"lr_model_{object_uid}")
+        if os.path.isfile(model_fname):
+            self.lr_model = data_ops.load_dill(model_fname)
+        else:
+            # Instantiate the LR model and split the dataset into train and test sets.
+            if lasso:
+                self.lr_model = MultiTaskLasso(alpha=1e-4, random_state=42, max_iter=15000)
+            else:
+                self.lr_model = LinearRegression()
+            self.lr_model.fit(X, y)
+
         y_pred = self.lr_model.predict(X)
         logger.info(f"Number of non-zero parameters in LR model: {np.count_nonzero(self.lr_model.coef_)}")
 
@@ -206,6 +226,10 @@ class MotionModel:
         logger.info(
             f"Model RMSE: {self.rmse:.6f}, Max Error: {max_error:.6f}, Explained variance: {100*explained_variance:.2f}%"
         )
+
+        # Save model if it has not been saved already.
+        if not os.path.isfile(model_fname):
+            data_ops.save_dill(model_fname, self.lr_model)
 
     def predict(self, X: Union[np.ndarray, list]) -> np.ndarray:
         X = np.asarray(X)
