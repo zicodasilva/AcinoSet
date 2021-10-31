@@ -1,4 +1,5 @@
 import os
+import hashlib
 from typing import Union, Tuple
 import numpy as np
 import pandas as pd
@@ -12,6 +13,16 @@ from py_utils import log, data_ops
 
 # Create a module logger with the name of this file.
 logger = log.logger(__name__)
+
+
+def unique_id(values: Tuple) -> str:
+    str_values = [str(x) for x in values]
+    m = hashlib.md5()
+    for s in str_values:
+        m.update(s.encode())
+    fn = m.hexdigest()
+
+    return fn
 
 
 def generate_xy_dataset(data: pd.DataFrame,
@@ -201,7 +212,7 @@ class MotionModel:
         X = xy_set[:, 0:(num_params * window_size)]
         y = xy_set[:, (num_params * window_size):]
 
-        object_uid = hash((num_params, start_idx, window_size, window_time, lasso, True if pose_model else False))
+        object_uid = unique_id((num_params, start_idx, window_size, window_time, lasso, True if pose_model else False))
         model_fname = os.path.join(os.path.dirname(dataset_fname), f"lr_model_{object_uid}")
         if os.path.isfile(model_fname):
             self.lr_model = data_ops.load_dill(model_fname)
