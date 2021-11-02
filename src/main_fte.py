@@ -890,7 +890,9 @@ def dataset_post_process():
         "2017_08_29/top/jules/run1_1": 1,
         "2017_09_02/top/jules/run1": 1,
         "2019_02_27/romeo/run": 2,
-        "2017_09_03/top/zorro/run1_2": 4
+        "2017_09_03/top/zorro/run1_2": 4,
+        "2017_08_29/top/phantom/run1_1": 1,
+        "2017_09_02/top/phantom/run1_3": 4,
     }
     metrics = {
         "pixels": [],
