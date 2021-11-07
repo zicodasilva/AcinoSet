@@ -274,7 +274,7 @@ def run(root_dir: str,
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
-    dlc_dir = os.path.join(data_dir, "dlc_pw")
+    dlc_dir = os.path.join(data_dir, "dlc")
     assert os.path.exists(dlc_dir)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -305,7 +305,7 @@ def run(root_dir: str,
     df_paths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
     h5_filename = os.path.basename(df_paths[cam_idx])
     pw_data = data_ops.load_pickle(
-        os.path.join(dlc_dir, f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
+        os.path.join(f"{dlc_dir}_pw", f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
     points_2d_df = pd.read_hdf(os.path.join(dlc_dir, h5_filename))
     base_data = list(points_2d_df.to_numpy())
     # Re-organise data to make for easy selection of data in the dataframe.
@@ -459,8 +459,7 @@ def run(root_dir: str,
 
     points_2d_df.loc[points_2d_df["likelihood"] <= dlc_thresh, ["x", "y"]] = np.nan  # ignore points with low likelihood
     nose_pts_2d = points_2d_df.query("marker == 'nose'")[["x", "y"]].to_numpy(dtype=np.float32)
-    X_w = triangulate_points_single_img(nose_pts_2d, 3, k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx],
-                                        t_arr[cam_idx])
+    X_w = triangulate_points_single_img(nose_pts_2d, 3, k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx])
     w = np.isnan(X_w[0, :])
     X_w[0, w] = 0.0
     x_est = np.array(UnivariateSpline(frame_range, X_w[0, :], w=~w)(frame_range))
@@ -480,12 +479,6 @@ def run(root_dir: str,
     psi_est = np.arctan2(dy_est, dx_est)
     # Duplicate the last heading estimate as the difference calculation returns N-1.
     psi_est = np.append(psi_est, [psi_est[-1]])
-
-    # Pairwise correspondence data.
-    h5_filename = os.path.basename(df_paths[cam_idx])
-    pw_data = data_ops.load_pickle(
-        os.path.join(dlc_dir, f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
-    base_data = list(pd.read_hdf(os.path.join(dlc_dir, h5_filename)).to_numpy())
 
     logger.info("Prepare data - End")
     # save parameters
@@ -536,7 +529,7 @@ def run(root_dir: str,
                            ext_dim=ext_dim,
                            n_comps=n_comps,
                            standardise=True)
-    pose_var = 0.3 * pose_model.error_variance
+    pose_var = pose_model.error_variance
     # Train motion model and make predictions with a predefined window size.
     motion_model = MotionModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_runs.h5",
                                P,
@@ -544,7 +537,7 @@ def run(root_dir: str,
                                window_time=window_time,
                                lasso=True,
                                pose_model=pose_model if reduced_space else None)
-    pred_var = 0.5 * motion_model.error_variance
+    pred_var = motion_model.error_variance
 
     if reduced_space:
         Q = np.abs(pose_model.project(Q))
@@ -793,7 +786,7 @@ def run(root_dir: str,
                 for d2 in m.D2:
                     for w in m.W:
                         slack_meas_err += loss_function(m.meas_err_weight[n, l, w] * m.slack_meas[n, l, d2, w], loss)
-        return 1e-3 * (slack_meas_err + slack_model_err + slack_pose_err + slack_motion_err)
+        return 1e-2 * (0.2 * slack_meas_err + 0.2 * slack_model_err + 0.3 * slack_pose_err + 0.3 * slack_motion_err)
 
     m.obj = pyo.Objective(rule=obj)
 
@@ -889,7 +882,7 @@ def dataset_post_process():
     tests = {
         "2017_08_29/top/jules/run1_1": 1,
         "2017_09_02/top/jules/run1": 1,
-        "2019_02_27/romeo/run": 2,
+        "2019_02_27/romeo/run": 3,
         "2017_09_03/top/zorro/run1_2": 4,
         "2017_08_29/top/phantom/run1_1": 1,
         "2017_09_02/top/phantom/run1_3": 4,
@@ -928,11 +921,6 @@ def dataset_post_process():
         y_range = np.max(y, axis=axis) - np.min(y, axis=axis)
         return x_range, y_range
 
-    def _moving_average(a, n=9):
-        ret = np.cumsum(a, dtype=float)
-        ret[n:] = ret[n:] - ret[:-n]
-        return np.concatenate((np.zeros(n - 1), ret[n - 1:] / n))
-
     points_dfs = []
     for i, data_path in enumerate(tests.keys()):
         cam_idx = tests[data_path]
@@ -943,17 +931,16 @@ def dataset_post_process():
         pose_model_data = data_ops.load_pickle(os.path.join(dir_prefix, data_path, f"fte_{cam_idx}", "fte.pickle"))
 
         # Read the camera 2D measurements.
-        df_paths = sorted(glob(os.path.join(os.path.join(root_dir, data_path, "dlc_pw"), "*.h5")))
+        df_paths = sorted(glob(os.path.join(os.path.join(root_dir, data_path, "dlc"), "*.h5")))
         h5_filename = os.path.basename(df_paths[cam_idx])
-        points_2d_df = pd.read_hdf(os.path.join(os.path.join(root_dir, data_path, "dlc_pw", h5_filename)))
+        points_2d_df = pd.read_hdf(os.path.join(os.path.join(root_dir, data_path, "dlc", h5_filename)))
         # Re-organise data to make for easy selection of data in the dataframe.
         points_2d_df = points_2d_df.droplevel([0], axis=1).swaplevel(0, 1, axis=1).T.unstack().T.reset_index().rename(
             {"level_0": "frame"}, axis=1)
         points_2d_df.columns.name = ""
         points_2d_df.rename(columns={"bodyparts": "marker"}, inplace=True)
-        # filtered_points_2d_df = points_2d_df[points_2d_df["likelihood"] > 0.8]  # ignore points with low likelihood
-        points_2d_df.loc[points_2d_df["likelihood"] <= 0.8, ["x", "y"]] = np.nan
         points_2d_df = points_2d_df[points_2d_df.marker != "lure"]
+        points_2d_df.loc[points_2d_df["likelihood"] <= 0.8, ["x", "y"]] = float("NaN")
         start_frame = multi_view_data['start_frame']
         end_frame = multi_view_data['start_frame'] + len(multi_view_data['positions'])
         points_2d = points_2d_df.query(f"{start_frame} <= frame < {end_frame}")
@@ -993,8 +980,8 @@ def dataset_post_process():
 
     error_dfs = []
     for data_path in list(tests.keys()):
-        df1 = temp.query(f"test == '{data_path}'").sort_values(by=['frame'])
-        df2 = temp2.query(f"test == '{data_path}'").sort_values(by=['frame'])
+        df1 = temp.query(f"test == '{data_path}'")
+        df2 = temp2.query(f"test == '{data_path}'")
         valid_frames = np.intersect1d(df1['frame'].to_numpy(), df2['frame'].to_numpy())
         for m in markers:
             # extract frames
@@ -1016,25 +1003,25 @@ def dataset_post_process():
                 pd.DataFrame(np.vstack((valid_frames, marker_arr, residual)).T,
                              columns=['frame', 'marker', 'pixel_residual']))
 
-    result_df = pd.concat(error_dfs, ignore_index=True) if len(error_dfs) > 0 else pd.DataFrame(
-        columns=['frame', 'marker', 'pixel_residual'])
-    gt_2d = result_df["pixel_residual"].to_numpy(dtype=float).reshape((-1, len(markers)))
-    mean_gt_2d = np.mean(gt_2d, axis=1)
-    num_nans = np.count_nonzero(np.isnan(gt_2d), axis=1)
+    result_df = pd.concat(error_dfs, ignore_index=True).sort_values(
+        by=['frame']) if len(error_dfs) > 0 else pd.DataFrame(
+            columns=['frame', 'marker', 'pixel_residual']).sort_values(by=['frame'])
     cam_px = temp[["x", "y"]].to_numpy(dtype=float).reshape((-1, len(markers), 2))
     x_bounds, y_bounds = _get_bounding_box(cam_px[:, :, 0], cam_px[:, :, 1])
     bounding_boxes = np.sqrt(x_bounds * y_bounds)
-    sorted_box_indices = np.argsort(bounding_boxes)
-    ax = fig.add_subplot(131)
-    ax.bar(bounding_boxes[sorted_box_indices], full_single_mpjpe_mm[sorted_box_indices])
+    gt_2d = result_df["pixel_residual"].to_numpy(dtype=float).reshape((-1, len(markers)))
+    mean_gt_2d = np.nanmean(gt_2d, axis=1)
+    num_nans = np.count_nonzero(np.isnan(gt_2d), axis=1)
+    ax = fig.add_subplot(311)
+    ax.scatter(bounding_boxes, full_single_mpjpe_mm)
     ax.set_xlabel("Bounding Box Size")
     ax.set_ylabel("Avg. 3D Error (mm)")
-    ax = fig.add_subplot(132)
-    ax.bar(bounding_boxes[sorted_box_indices], mean_gt_2d[sorted_box_indices])
+    ax = fig.add_subplot(312)
+    ax.scatter(bounding_boxes, mean_gt_2d)
     ax.set_xlabel("Bounding Box Size")
     ax.set_ylabel("Avg. Reprojection Error (px)")
-    ax = fig.add_subplot(133)
-    ax.plot(bounding_boxes[sorted_box_indices], num_nans[sorted_box_indices])
+    ax = fig.add_subplot(313)
+    ax.scatter(bounding_boxes, num_nans)
     ax.set_xlabel("Bounding Box Size")
     ax.set_ylabel("# of Missing Measurements")
     fig.savefig("../data/bounding_box_vs_error.png")
