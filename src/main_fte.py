@@ -1043,7 +1043,9 @@ def run_dataset_test():
         "2017_08_29/top/jules/run1_1": (10, 110, 1),
         "2017_09_02/top/phantom/run1_3": (50, 130, 4),
         "2017_09_02/top/jules/run1": (21, 100, 1),
-        "2017_08_29/top/phantom/run1_1": (20, 170, 1)
+        "2017_08_29/top/phantom/run1_1": (20, 170, 1),
+        "2019_02_27/romeo/run": (100, 190, 3),
+        "2017_09_03/top/zorro/run1_2": (20, 120, 4)
     }
     time0 = time()
     logger.info("Run through subset...")
