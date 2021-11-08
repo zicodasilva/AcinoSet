@@ -499,13 +499,14 @@ def run(root_dir: str,
     window_size = 10
     window_time = 1
     window_buf = window_size * window_time
+    traj_start = start_frame - window_buf
     m = pyo.ConcreteModel(name="Cheetah from measurements")
     m.Ts = Ts
     # ===== SETS =====
     P = len(list(sym_list))  # number of pose parameters
     L = len(markers)  # number of dlc labels per frame
 
-    m.N = pyo.RangeSet(N)
+    m.N = pyo.RangeSet(N + window_buf)
     if reduced_space:
         m.P = pyo.RangeSet(ext_dim + n_comps)
     else:
@@ -543,18 +544,21 @@ def run(root_dir: str,
         Q = np.abs(pose_model.project(Q))
     # ======= WEIGHTS =======
     def init_meas_weights(m, n, l, w):
-        # Determine if the current measurement is the base prediction or a pairwise prediction.
-        marker = markers[l - 1]
-        values = pw_data[(n - 1) + start_frame]
-        likelihoods = values["pose"][2::3]
-        if w < 2:
-            base = index_dict[marker]
-            likelihoods = base_data[(n - 1) + start_frame][2::3]
+        if n > window_buf:
+            # Determine if the current measurement is the base prediction or a pairwise prediction.
+            marker = markers[l - 1]
+            values = pw_data[(n - 1) + traj_start]
+            likelihoods = values["pose"][2::3]
+            if w < 2:
+                base = index_dict[marker]
+                likelihoods = base_data[(n - 1) + traj_start][2::3]
+            else:
+                try:
+                    base = pair_dict[marker][w - 2]
+                except IndexError:
+                    return 0.0
         else:
-            try:
-                base = pair_dict[marker][w - 2]
-            except IndexError:
-                return 0.0
+            return 0.0
 
         # Filter measurements based on DLC threshold.
         # This does ensures that badly predicted points are not considered in the objective function.
@@ -567,22 +571,25 @@ def run(root_dir: str,
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, l, d2, w):
-        # Determine if the current measurement is the base prediction or a pairwise prediction.
-        marker = markers[l - 1]
-        if w < 2:
-            base = index_dict[marker]
-            val = base_data[(n - 1) + start_frame][d2 - 1::3]
+        if n > window_buf:
+            # Determine if the current measurement is the base prediction or a pairwise prediction.
+            marker = markers[l - 1]
+            if w < 2:
+                base = index_dict[marker]
+                val = base_data[(n - 1) + traj_start][d2 - 1::3]
 
-            return val[base]
+                return val[base]
+            else:
+                try:
+                    values = pw_data[(n - 1) + traj_start]
+                    val = values["pose"][d2 - 1::3]
+                    base = pair_dict[marker][w - 2]
+                    val_pw = values["pws"][:, :, :, d2 - 1]
+                    return val[base] + val_pw[0, base, index_dict[marker]]
+                except IndexError:
+                    return 0.0
         else:
-            try:
-                values = pw_data[(n - 1) + start_frame]
-                val = values["pose"][d2 - 1::3]
-                base = pair_dict[marker][w - 2]
-                val_pw = values["pws"][:, :, :, d2 - 1]
-                return val[base] + val_pw[0, base, index_dict[marker]]
-            except IndexError:
-                return 0.0
+            return 0.0
 
     m.meas = pyo.Param(m.N, m.L, m.D2, m.W, initialize=init_measurements)
 
@@ -598,19 +605,19 @@ def run(root_dir: str,
     m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
-    init_x = np.zeros((N, P))
-    init_dx = np.zeros((N, P))
-    init_ddx = np.zeros((N, P))
+    init_x = np.zeros((N + window_buf, P))
+    init_dx = np.zeros((N + window_buf, P))
+    init_ddx = np.zeros((N + window_buf, P))
     if init_fte:
         fte_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), fte_type, "fte.pickle"))
         init_x = fte_states["x"]
         init_dx = fte_states["dx"]
         init_ddx = fte_states["ddx"]
     else:
-        init_x[:, idx["x_0"]] = x_est[start_frame:start_frame + N]  #x # change this to [start_frame: end_frame]?
-        init_x[:, idx["y_0"]] = y_est[start_frame:start_frame + N]  #y
-        init_x[:, idx["z_0"]] = z_est[start_frame:start_frame + N]  #z
-        init_x[:, idx["psi_0"]] = psi_est[start_frame:start_frame + N]  # yaw = psi
+        init_x[:, idx["x_0"]] = x_est[traj_start:start_frame + N]  #x # change this to [start_frame: end_frame]?
+        init_x[:, idx["y_0"]] = y_est[traj_start:start_frame + N]  #y
+        init_x[:, idx["z_0"]] = z_est[traj_start:start_frame + N]  #z
+        init_x[:, idx["psi_0"]] = psi_est[traj_start:start_frame + N]  # yaw = psi
 
     if reduced_space:
         init_x = pose_model.project(init_x)
@@ -691,13 +698,16 @@ def run(root_dir: str,
 
     # MEASUREMENT
     def measurement_constraints(m, n, l, d2, w):
-        #project
-        K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
-        x = m.poses[n, l, 1]
-        y = m.poses[n, l, 2]
-        z = m.poses[n, l, 3]
+        if n > window_buf:
+            #project
+            K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
+            x = m.poses[n, l, 1]
+            y = m.poses[n, l, 2]
+            z = m.poses[n, l, 3]
 
-        return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, l, d2, w] - m.slack_meas[n, l, d2, w] == 0.0
+            return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, l, d2, w] - m.slack_meas[n, l, d2, w] == 0.0
+        else:
+            return pyo.Constraint.Skip
 
     m.measurement = pyo.Constraint(m.N, m.L, m.D2, m.W, rule=measurement_constraints)
 
@@ -782,10 +792,12 @@ def run(root_dir: str,
                 if not reduced_space:
                     slack_pose_err += m.pose_err_weight[p] * m.slack_pose[n, p]**2
             # Measurement Error
-            for l in m.L:
-                for d2 in m.D2:
-                    for w in m.W:
-                        slack_meas_err += loss_function(m.meas_err_weight[n, l, w] * m.slack_meas[n, l, d2, w], loss)
+            if n > window_buf:
+                for l in m.L:
+                    for d2 in m.D2:
+                        for w in m.W:
+                            slack_meas_err += loss_function(m.meas_err_weight[n, l, w] * m.slack_meas[n, l, d2, w],
+                                                            loss)
         return 1e-2 * (0.2 * slack_meas_err + 0.2 * slack_model_err + 0.3 * slack_pose_err + 0.3 * slack_motion_err)
 
     m.obj = pyo.Objective(rule=obj)
@@ -823,11 +835,11 @@ def run(root_dir: str,
 
     # ===== SAVE FTE RESULTS =====
     if reduced_space:
-        x_optimised = pose_model.project(get_vals_v(m.x, [m.N, m.P]), inverse=True)
+        x_optimised = pose_model.project(get_vals_v(m.x, [m.N, m.P]), inverse=True)[window_buf:]
     else:
-        x_optimised = get_vals_v(m.x, [m.N, m.P])
-    dx_optimised = get_vals_v(m.dx, [m.N, m.P])
-    ddx_optimised = get_vals_v(m.ddx, [m.N, m.P])
+        x_optimised = get_vals_v(m.x, [m.N, m.P])[window_buf:]
+    dx_optimised = get_vals_v(m.dx, [m.N, m.P])[window_buf:]
+    ddx_optimised = get_vals_v(m.ddx, [m.N, m.P])[window_buf:]
     positions = [pose_to_3d(*states) for states in x_optimised]
     model_weight = get_vals_v(m.model_err_weight, [m.P])
     model_err = get_vals_v(m.slack_model, [m.N, m.P])
@@ -1012,15 +1024,15 @@ def dataset_post_process():
     gt_2d = result_df["pixel_residual"].to_numpy(dtype=float).reshape((-1, len(markers)))
     mean_gt_2d = np.nanmean(gt_2d, axis=1)
     num_nans = np.count_nonzero(np.isnan(gt_2d), axis=1)
-    ax = fig.add_subplot(311)
+    ax = fig.add_subplot(2, 2, (1, 3))
     ax.scatter(bounding_boxes, full_single_mpjpe_mm)
     ax.set_xlabel("Bounding Box Size")
     ax.set_ylabel("Avg. 3D Error (mm)")
-    ax = fig.add_subplot(312)
+    ax = fig.add_subplot(2, 2, 2)
     ax.scatter(bounding_boxes, mean_gt_2d)
     ax.set_xlabel("Bounding Box Size")
     ax.set_ylabel("Avg. Reprojection Error (px)")
-    ax = fig.add_subplot(313)
+    ax = fig.add_subplot(2, 2, 4)
     ax.scatter(bounding_boxes, num_nans)
     ax.set_xlabel("Bounding Box Size")
     ax.set_ylabel("# of Missing Measurements")
