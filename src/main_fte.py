@@ -1079,6 +1079,96 @@ def run_dataset_test():
     logger.info(f"Run through all videos took {time1 - time0:.2f}s")
 
 
+def run_tests():
+    import gc
+    working_dir = os.path.join('/', 'data', 'dlc', 'to_analyse', 'cheetah_videos')
+    dir_prefix = "/data/zico/CheetahResults/pw-sd-fte"
+    model_dir = os.path.join("/data/zico/CheetahRuns/v4")
+    straight_runs = [
+        "2017_08_29/top/jules/run1_1",
+        "2017_09_02/top/phantom/run1_1",
+        "2017_09_02/top/phantom/run1_3",
+        "2017_09_02/top/jules/run1",
+        "2017_09_02/bottom/jules/run2",
+        "2017_09_03/bottom/zorro/run2_2",
+        "2017_09_03/top/zorro/run1_2",
+        "2017_12_16/top/cetane/run1",
+        "2017_12_21/top/lily/run1",
+        # End of dataset used for reduced pose representation with PCA.
+        "2019_02_27/ebony/run",
+        "2019_02_27/kiara/run",
+        "2019_02_27/romeo/run",
+        "2019_03_03/menya/run",
+        "2019_03_05/jules/run",
+        "2017_08_29/top/phantom/run1_1",
+        "2017_08_29/top/jules/run1_2",
+        "2017_09_03/bottom/zorro/run2_1",
+        "2017_12_10/top/phantom/run1",
+        "2017_12_12/top/cetane/run1_2",
+        "2017_12_12/top/cetane/run1_1",
+        "2019_03_05/lily/run",
+        "2019_03_07/menya/run",
+        "2019_03_07/phantom/run"
+    ]
+
+    # Read in all pickle files to gather trajectories into a dictionary of trajectories.
+    test_files = glob.glob(os.path.join(model_dir, "*.pickle"))
+    tests = {}
+    for t_fname in test_files:
+        fname = t_fname.split(model_dir + "/")[-1]
+        input_data = data_ops.load_pickle(t_fname)
+        test_key = fname.split(".pickle")[0]
+        if test_key in straight_runs:
+            tests[test_key] = {}
+            tests[test_key]["pos"] = np.asarray(input_data["positions"])
+            tests[test_key]["x"] = np.asarray(input_data["x"])
+            tests[test_key]["dx"] = np.asarray(input_data["dx"])
+            tests[test_key]["start_frame"] = input_data["start_frame"] + 1
+            tests[test_key]["end_frame"] = input_data["start_frame"] + np.asarray(input_data["positions"]).shape[0]
+
+    logger.info(f"Number of points in each run trajectory ({len(tests.keys())}):")
+    [f"{t_run} - ({tests[t_run]['start_frame']}, {tests[t_run]['end_frame']})" for t_run in tests.keys()]
+
+    time0 = time()
+    logger.info("Run through subset...")
+    # Initialise the Ipopt solver.
+    optimiser = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
+    # solver options
+    optimiser.options["print_level"] = 5
+    optimiser.options["max_iter"] = 500
+    optimiser.options["max_cpu_time"] = 10000
+    optimiser.options["Tol"] = 1e-1
+    optimiser.options["OF_print_timing_statistics"] = "yes"
+    optimiser.options["OF_print_frequency_time"] = 10
+    optimiser.options["OF_hessian_approximation"] = "limited-memory"
+    optimiser.options["OF_accept_every_trial_step"] = "yes"
+    optimiser.options["linear_solver"] = "ma86"
+    optimiser.options["OF_ma86_scaling"] = "none"
+    for test_vid in tqdm(tests.keys()):
+        for i in range(6):
+            # Force garbage collection so that the repeated model creation does not overflow the memory!
+            gc.collect()
+            try:
+                run(working_dir,
+                    test_vid,
+                    cam_idx=i,
+                    start_frame=tests[test_vid]["start_frame"],
+                    end_frame=tests[test_vid]["end_frame"],
+                    dlc_thresh=0.5,
+                    n_comps=9,
+                    opt=optimiser,
+                    out_dir_prefix=dir_prefix,
+                    init_fte=True,
+                    extra_constraints=False,
+                    generate_reprojection_videos=False)
+            except Exception:
+                continue
+
+    time1 = time()
+    logger.info(f"Run through all videos took {time1 - time0:.2f}s")
+
+
 if __name__ == "__main__":
     # run_dataset_test()
-    dataset_post_process()
+    # dataset_post_process()
+    run_tests()
