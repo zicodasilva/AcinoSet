@@ -263,11 +263,12 @@ def run(root_dir: str,
     t0 = time()
 
     if out_dir_prefix:
-        out_dir = os.path.join(out_dir_prefix, data_path, f"fte_{cam_idx}" if extra_constraints else "fte")
-        fte_dir = os.path.join(out_dir_prefix, data_path, "fte")
+        out_dir = os.path.join(out_dir_prefix, data_path,
+                               f"fte_{cam_idx}" if extra_constraints else f"fte_orig_{cam_idx}")
+        fte_dir = os.path.join(out_dir_prefix, data_path, f"fte_orig_{cam_idx}")
     else:
-        out_dir = os.path.join(root_dir, data_path, f"fte_{cam_idx}" if extra_constraints else "fte")
-        fte_dir = os.path.join(root_dir, data_path, "fte")
+        out_dir = os.path.join(root_dir, data_path, f"fte_{cam_idx}" if extra_constraints else f"fte_orig_{cam_idx}")
+        fte_dir = os.path.join(root_dir, data_path, f"fte_orig_{cam_idx}")
 
     if extra_constraints:
         assert os.path.exists(fte_dir)
@@ -529,7 +530,7 @@ def run(root_dir: str,
                            ext_dim=ext_dim,
                            n_comps=n_comps,
                            standardise=True)
-    pose_var = pose_model.error_variance
+    pose_var = 0.3 * pose_model.error_variance
     # Train motion model and make predictions with a predefined window size.
     motion_model = MotionModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_runs.h5",
                                P,
@@ -537,7 +538,7 @@ def run(root_dir: str,
                                window_time=window_time,
                                lasso=True,
                                pose_model=pose_model if reduced_space else None)
-    pred_var = motion_model.error_variance
+    pred_var = 0.5 * motion_model.error_variance
 
     if reduced_space:
         Q = np.abs(pose_model.project(Q))
@@ -786,7 +787,7 @@ def run(root_dir: str,
                 for d2 in m.D2:
                     for w in m.W:
                         slack_meas_err += loss_function(m.meas_err_weight[n, l, w] * m.slack_meas[n, l, d2, w], loss)
-        return 1e-2 * (0.2 * slack_meas_err + 0.2 * slack_model_err + 0.3 * slack_pose_err + 0.3 * slack_motion_err)
+        return 1e-3 * (slack_meas_err + slack_model_err + slack_pose_err + slack_motion_err)
 
     m.obj = pyo.Objective(rule=obj)
 
@@ -1082,7 +1083,7 @@ def run_dataset_test():
 def run_tests():
     import gc
     working_dir = os.path.join('/', 'data', 'dlc', 'to_analyse', 'cheetah_videos')
-    dir_prefix = "/data/zico/CheetahResults/pw-sd-fte"
+    dir_prefix = "/data/zico/CheetahResults/pw_sd_fte"
     model_dir = os.path.join("/data/zico/CheetahRuns/v4")
     straight_runs = [
         "2017_08_29/top/jules/run1_1",
@@ -1110,24 +1111,22 @@ def run_tests():
         "2019_03_07/menya/run",
         "2019_03_07/phantom/run"
     ]
-
+    check_straight_runs = [run.replace("/", "_") for run in straight_runs]
     # Read in all pickle files to gather trajectories into a dictionary of trajectories.
-    test_files = glob.glob(os.path.join(model_dir, "*.pickle"))
+    test_files = glob(os.path.join(model_dir, "*.pickle"))
     tests = {}
     for t_fname in test_files:
         fname = t_fname.split(model_dir + "/")[-1]
         input_data = data_ops.load_pickle(t_fname)
         test_key = fname.split(".pickle")[0]
-        if test_key in straight_runs:
-            tests[test_key] = {}
-            tests[test_key]["pos"] = np.asarray(input_data["positions"])
-            tests[test_key]["x"] = np.asarray(input_data["x"])
-            tests[test_key]["dx"] = np.asarray(input_data["dx"])
-            tests[test_key]["start_frame"] = input_data["start_frame"] + 1
-            tests[test_key]["end_frame"] = input_data["start_frame"] + np.asarray(input_data["positions"]).shape[0]
+        if test_key in check_straight_runs:
+            test = straight_runs[check_straight_runs.index(test_key)]
+            tests[test] = {}
+            tests[test]["start_frame"] = input_data["start_frame"] + 1
+            tests[test]["end_frame"] = input_data["start_frame"] + np.asarray(input_data["positions"]).shape[0]
 
     logger.info(f"Number of points in each run trajectory ({len(tests.keys())}):")
-    [f"{t_run} - ({tests[t_run]['start_frame']}, {tests[t_run]['end_frame']})" for t_run in tests.keys()]
+    [print(f"{t_run} - ({tests[t_run]['start_frame']}, {tests[t_run]['end_frame']})") for t_run in tests.keys()]
 
     time0 = time()
     logger.info("Run through subset...")
