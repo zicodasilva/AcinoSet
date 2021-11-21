@@ -15,7 +15,6 @@ from pyomo.opt import SolverFactory
 from lib import misc, utils, app
 from lib.calib import project_points_fisheye, triangulate_points_single_img
 from lib.models import PoseModel, MotionModel, PoseModelGMM
-from scipy.stats import multivariate_normal
 
 from py_utils import data_ops, log
 
