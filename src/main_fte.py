@@ -269,7 +269,8 @@ def run(root_dir: str,
                                f"fte_{cam_idx}" if extra_constraints else f"fte_orig_{cam_idx}")
         fte_dir = os.path.join(out_dir_prefix, data_path, f"fte_orig_{cam_idx}")
     else:
-        out_dir = os.path.join(root_dir, "cheetah_videos", data_path, f"fte_{cam_idx}" if extra_constraints else f"fte_orig_{cam_idx}")
+        out_dir = os.path.join(root_dir, "cheetah_videos", data_path,
+                               f"fte_{cam_idx}" if extra_constraints else f"fte_orig_{cam_idx}")
         fte_dir = os.path.join(root_dir, "cheetah_videos", data_path, f"fte_orig_{cam_idx}")
 
     if extra_constraints:
@@ -347,7 +348,8 @@ def run(root_dir: str,
         N = end_frame - start_frame
 
     ## ========= POSE FUNCTIONS ========
-    pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "cheetah_videos", "pose_3d_functions_with_paws.pickle"))
+    pose_to_3d, pos_funcs = data_ops.load_dill(
+        os.path.join(root_dir, "cheetah_videos", "pose_3d_functions_with_paws.pickle"))
     idx = misc.get_pose_params()
     sym_list = list(idx.keys())
 
@@ -534,7 +536,7 @@ def run(root_dir: str,
                            standardise=True)
     pose_var = 0.3 * pose_model.error_variance
 
-    pose_gmm = PoseModelGMM("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_runs.h5",
+    pose_gmm = PoseModelGMM(os.path.join(root_dir, "cheetah_runs", "v4", "model", "dataset_runs.h5"),
                             pose_params=idx,
                             ext_dim=ext_dim,
                             n_comps=n_comps)
@@ -816,9 +818,8 @@ def run(root_dir: str,
     logger.info("Objective initialisation...Done")
     # RUN THE SOLVER
     if opt is None:
-        opt = SolverFactory(
-            "ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else None
-        )
+        opt = SolverFactory("ipopt",
+                            executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else None)
         # solver options
         opt.options["print_level"] = 5
         opt.options["max_iter"] = 1000
