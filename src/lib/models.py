@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from sklearn.linear_model import LinearRegression, MultiTaskLasso
+from sklearn.mixture import GaussianMixture
 from sklearn import metrics
 
 from lib import misc
@@ -245,3 +246,21 @@ class MotionModel:
     def predict(self, X: Union[np.ndarray, list]) -> np.ndarray:
         X = np.asarray(X)
         return np.dot(self.lr_model.coef_, X.flatten()) + self.lr_model.intercept_
+
+
+class PoseModelGMM:
+    def __init__(self, dataset_fname: str, pose_params: dict, ext_dim: int, n_comps: int, verbose: bool = False):
+        self.p_idx = pose_params
+        self.n_comps = n_comps
+        self.num_vars = len(pose_params.keys())
+        self.ext_dim = ext_dim
+        self.included_vars = np.arange(ext_dim, self.num_vars, dtype=int)
+        self.excluded_vars = np.arange(0, ext_dim, dtype=int)
+
+        df = pd.read_hdf(dataset_fname)
+        self.X = df.iloc[:, self.ext_dim:self.num_vars].to_numpy()
+        self.gmm = GaussianMixture(n_components=n_comps, random_state=42).fit(self.X)
+        if self.gmm.converged_:
+            logger.info(f"Converged GMM with {n_comps} components")
+        log_likelihood = self.gmm.score(self.X)
+        logger.info(f"The likelihood of the dataset under the GMM: {log_likelihood:.4f}")

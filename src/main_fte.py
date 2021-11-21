@@ -3,7 +3,7 @@ import platform
 import json
 from typing import Union, Tuple, Dict
 import numpy as np
-from pyomo.core.expr.current import log as pyomo_log
+from pyomo.core.expr.current import log as pyomo_log, exp
 import sympy as sp
 import pandas as pd
 from glob import glob
@@ -14,7 +14,8 @@ import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 from lib import misc, utils, app
 from lib.calib import project_points_fisheye, triangulate_points_single_img
-from lib.models import PoseModel, MotionModel
+from lib.models import PoseModel, MotionModel, PoseModelGMM
+from scipy.stats import multivariate_normal
 
 from py_utils import data_ops, log
 
@@ -254,6 +255,7 @@ def run(root_dir: str,
         reduced_space: bool = False,
         inc_obj_orien: bool = False,
         inc_obj_vel: bool = True,
+        use_gmm: bool = True,
         init_fte=False,
         opt=None,
         out_dir_prefix: str = None,
@@ -531,6 +533,17 @@ def run(root_dir: str,
                            n_comps=n_comps,
                            standardise=True)
     pose_var = 0.3 * pose_model.error_variance
+
+    pose_gmm = PoseModelGMM("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_runs.h5",
+                            pose_params=idx,
+                            ext_dim=ext_dim,
+                            n_comps=n_comps)
+
+    def norm_pdf_multivariate(x: np.ndarray, mu: np.ndarray, cov: np.ndarray):
+        part1 = 1 / (((2 * np.pi)**(len(mu) / 2)) * (np.linalg.det(cov)**(1 / 2)))
+        part2 = (-1 / 2) * ((x - mu).T.dot(np.linalg.inv(cov))).dot((x - mu))
+        return part1 * exp(part2)
+
     # Train motion model and make predictions with a predefined window size.
     motion_model = MotionModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_runs.h5",
                                P,
@@ -678,7 +691,7 @@ def run(root_dir: str,
 
         m.motion_constraint = pyo.Constraint(m.N, m.P, rule=motion_constraint)
 
-        if not reduced_space:
+        if not reduced_space and not use_gmm:
 
             def reduced_pose_constraint(m, n, p):
                 # Contrain poses that are close to the reduced pose space.
@@ -777,10 +790,19 @@ def run(root_dir: str,
         slack_meas_err = 0.0
         for n in m.N:
             # Model Error
+            if use_gmm:
+                x = [m.x[n, i] for i in range(1, P + 1)]
+                if inc_obj_vel:
+                    x += [m.dx[n, i] for i in range(1, root_dim + 1)]
+                slack_pose_err += -pyomo_log(
+                    sum([
+                        w * norm_pdf_multivariate(np.asarray(x)[root_dim:], mu, cov)
+                        for w, mu, cov in zip(pose_gmm.gmm.weights_, pose_gmm.gmm.means_, pose_gmm.gmm.covariances_)
+                    ]))
             for p in m.P:
                 slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
                 slack_motion_err += m.motion_err_weight[p] * m.slack_motion[n, p]**2
-                if not reduced_space:
+                if not reduced_space and not use_gmm:
                     slack_pose_err += m.pose_err_weight[p] * m.slack_pose[n, p]**2
             # Measurement Error
             for l in m.L:
