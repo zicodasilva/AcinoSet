@@ -269,13 +269,13 @@ def run(root_dir: str,
                                f"fte_{cam_idx}" if extra_constraints else f"fte_orig_{cam_idx}")
         fte_dir = os.path.join(out_dir_prefix, data_path, f"fte_orig_{cam_idx}")
     else:
-        out_dir = os.path.join(root_dir, data_path, f"fte_{cam_idx}" if extra_constraints else f"fte_orig_{cam_idx}")
-        fte_dir = os.path.join(root_dir, data_path, f"fte_orig_{cam_idx}")
+        out_dir = os.path.join(root_dir, "cheetah_videos", data_path, f"fte_{cam_idx}" if extra_constraints else f"fte_orig_{cam_idx}")
+        fte_dir = os.path.join(root_dir, "cheetah_videos", data_path, f"fte_orig_{cam_idx}")
 
     if extra_constraints:
         assert os.path.exists(fte_dir)
 
-    data_dir = os.path.join(root_dir, data_path)
+    data_dir = os.path.join(root_dir, "cheetah_videos", data_path)
     assert os.path.exists(data_dir)
     dlc_dir = os.path.join(data_dir, "dlc")
     assert os.path.exists(dlc_dir)
@@ -347,7 +347,7 @@ def run(root_dir: str,
         N = end_frame - start_frame
 
     ## ========= POSE FUNCTIONS ========
-    pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "pose_3d_functions_with_paws.pickle"))
+    pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "cheetah_videos", "pose_3d_functions_with_paws.pickle"))
     idx = misc.get_pose_params()
     sym_list = list(idx.keys())
 
@@ -527,7 +527,7 @@ def run(root_dir: str,
     if inc_obj_vel and not reduced_space:
         for state in list(idx.keys())[:root_dim]:
             idx["d" + state] = P + idx[state]
-    pose_model = PoseModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_pose.h5",
+    pose_model = PoseModel(os.path.join(root_dir, "cheetah_runs", "v4", "model", "dataset_pose.h5"),
                            pose_params=idx,
                            ext_dim=ext_dim,
                            n_comps=n_comps,
@@ -545,7 +545,7 @@ def run(root_dir: str,
         return part1 * exp(part2)
 
     # Train motion model and make predictions with a predefined window size.
-    motion_model = MotionModel("/Users/zico/msc/data/CheetahRuns/v4/model/dataset_runs.h5",
+    motion_model = MotionModel(os.path.join(root_dir, "cheetah_runs", "v4", "model", "dataset_runs.h5"),
                                P,
                                window_size=window_size,
                                window_time=window_time,
@@ -817,7 +817,7 @@ def run(root_dir: str,
     # RUN THE SOLVER
     if opt is None:
         opt = SolverFactory(
-            "ipopt",  #executable="/home/zico/lib/ipopt/build/bin/ipopt"
+            "ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else None
         )
         # solver options
         opt.options["print_level"] = 5
@@ -882,7 +882,7 @@ def run(root_dir: str,
 
     # Create 2D reprojection videos.
     if generate_reprojection_videos:
-        video_paths = sorted(glob(os.path.join(root_dir, data_path,
+        video_paths = sorted(glob(os.path.join(root_dir, "cheetah_videos", data_path,
                                                "cam[1-9].mp4")))  # original vids should be in the parent dir
         app.create_labeled_videos(video_paths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
@@ -890,7 +890,7 @@ def run(root_dir: str,
     if extra_constraints:
         compare_traj_error(os.path.join(fte_dir, "fte.pickle"),
                            out_fpath,
-                           root_dir,
+                           os.path.join(root_dir, "cheetah_videos"),
                            data_path,
                            fte_type=fte_type,
                            out_dir_prefix=out_dir_prefix)
