@@ -351,6 +351,21 @@ def metrics(
 
     return mean_error, med_error, pck
 
+def plot_cheetah(root_dir: str,
+                 data_dir: str,
+                 fte_type: str = "sd_fte",
+                 out_dir_prefix: str = None,
+                 plot_reprojections=False,
+                 centered=False):
+    fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
+    if out_dir_prefix is not None:
+        fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
+    app.plot_cheetah_reconstruction(fte_file,
+                                    scene_fname=scene_fpath,
+                                    reprojections=plot_reprojections,
+                                    dark_mode=True,
+                                    centered=centered)
 
 def run(root_dir: str,
         data_path: str,
