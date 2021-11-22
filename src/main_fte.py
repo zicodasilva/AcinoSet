@@ -1,4 +1,5 @@
 import os
+import platform
 import json
 from typing import Union, Tuple, Dict, List
 import numpy as np
@@ -406,9 +407,13 @@ def run(root_dir: str,
         return
     d_arr = d_arr.reshape((-1, 4))
 
-    # load video info
-    res, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
-    assert res == cam_res
+     # load video info
+    res, fps, num_frames = 0, 0, 0
+    if platform.python_implementation() == "CPython":
+        res, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
+        assert res == cam_res
+    elif platform.python_implementation() == "PyPy":
+        fps = 120 if "2019" in data_dir else 90
 
     # load DLC data
     dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
@@ -417,6 +422,11 @@ def run(root_dir: str,
     # load measurement dataframe (pixels, likelihood)
     points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
     filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]  # ignore points with low likelihood
+
+    if platform.python_implementation() == "PyPy":
+        # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
+        # So instead I manually get the number of frames and the frame rate based (determined above).
+        num_frames = points_2d_df["frame"].max() + 1
 
     assert 0 != start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
     assert 0 != end_frame <= num_frames, f'end_frame must be less than or equal to {num_frames}'
@@ -754,12 +764,14 @@ def run(root_dir: str,
     print('Variable initialisation...Done')
 
     # ===== CONSTRAINTS =====
+    # Get the pose variables for each time instance to include in the constraints of the optimisation.
+    X = np.array([[m.x[n, p] for n in m.N] for p in m.P]).T
+    positions = np.array([pose_to_3d(*states) for states in X])
+
     # 3D POSE
     def pose_constraint(m, n, l, d3):
-        # Get 3d points
-        var_list = [m.x[n, p] for p in range(1, P + 1)]
-        [pos] = pos_funcs[l - 1](*var_list)
-        return pos[d3 - 1] == m.poses[n, l, d3]
+        # 3D points from the pose state.
+        return positions[n - 1, l - 1, d3 - 1] == m.poses[n, l, d3]
 
     m.pose_constraint = pyo.Constraint(m.N, m.L, m.D3, rule=pose_constraint)
 
@@ -782,7 +794,7 @@ def run(root_dir: str,
 
     if enable_shutter_delay:
         m.shutter_base_constraint = pyo.Constraint(rule=lambda m: m.shutter_delay[1] == 0.0)
-        m.shutter_delay_constraint = pyo.Constraint(m.C, rule=lambda m, c: (-m.Ts, m.shutter_delay[c], m.Ts))
+        m.shutter_delay_constraint = pyo.Constraint(m.C, rule=lambda m, c: (-m.Ts*5, m.shutter_delay[c], m.Ts*5))
 
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
@@ -885,7 +897,7 @@ def run(root_dir: str,
     # RUN THE SOLVER
     if opt is None:
         opt = SolverFactory(
-            'ipopt',  #executable='/home/zico/lib/ipopt/build/bin/ipopt'
+            'ipopt',  executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else None
         )
         # solver options
         opt.options['print_level'] = 5
