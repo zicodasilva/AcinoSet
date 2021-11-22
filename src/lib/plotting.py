@@ -195,7 +195,7 @@ class Scene(Animation):
 
 
 class Cheetah(Animation):
-    def __init__(self, multiple_reconstructions, scene_fpath, labels, project_func, v_vec = None, yaw = None, hide_lure=False, reprojections=True, **kwargs):
+    def __init__(self, multiple_reconstructions, scene_fpath, labels, project_func, hide_lure=False, reprojections=True, **kwargs):
         Animation.__init__(self, 'Cheetah Reconstruction', scene_fpath, **kwargs)
         self.layout.addWidget(self.view, 0, 0, self.n_cams, 1)
 
@@ -209,12 +209,14 @@ class Cheetah(Animation):
                       4,20,5,20,20,21,21,22,22,23] # left back leg
 
         colours = [[self.dark_mode]*3+[1], # white if dark_mode else black
-                   [1,0,1,1],              # fuchsia/magenta
+                   [1,0,1,1],              # magenta
                    [0,1,0,1],              # green
-                   [0,0.8,0.8,1]]          # light blue
+                   [0,0.8,0.8,1],          # light blue
+                   [1,0.65,0,1],           # orange
+                   [1,1,0,1]]           # yellow
 
         self.n_reconstructions = len(multiple_reconstructions)
-        assert self.n_reconstructions < 5, 'Cannot plot more than 4 reconstructions at a time'
+        assert self.n_reconstructions < 7, 'Cannot plot more than 4 reconstructions at a time'
         self.n_frames = len(multiple_reconstructions[0])
         self.frame = 0
         self.vector_frames = []
@@ -233,11 +235,6 @@ class Cheetah(Animation):
                     frame = frame[:-1]
                 scatter_frames.append(frame)
                 lines_frames.append(frame[lines_idxs, :])
-                if v_vec:
-                    p_head = np.array([frame[0, 0], frame[0, 1], frame[0, 2]])
-                    theta = v_vec[i][idx]
-                    p_v_vec = np.array([p_head[0] + 0.75*np.cos(theta), p_head[1] + 0.75*np.sin(theta), p_head[2]])
-                    vector_frames.append(np.array([p_head, p_v_vec]))
 
             self.scatter_frames.append(np.array(scatter_frames))
             self.lines_frames.append(np.array(lines_frames))
@@ -252,12 +249,6 @@ class Cheetah(Animation):
             self.line_plots.append(gl.GLLinePlotItem(pos=np.zeros((2,3)), color=colours[i], width=self.screen_res[0]/1250, antialias=True, mode='lines'))
             self.line_plots[i].setGLOptions('translucent')
             self.view.addItem(self.line_plots[i])
-
-            # create velocity vector.
-            if v_vec:
-                self.vector_plots.append(gl.GLLinePlotItem(pos=np.zeros((2,3)), color=[1, 1, 0, 1], width=self.screen_res[0]/1250, antialias=True, mode='lines'))
-                self.vector_plots[i].setGLOptions('translucent')
-                self.view.addItem(self.vector_plots[i])
 
         # ====== 2D ======
         if self.centered:
