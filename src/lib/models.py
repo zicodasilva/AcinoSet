@@ -243,9 +243,12 @@ class MotionModel:
         if not os.path.isfile(model_fname):
             data_ops.save_dill(model_fname, self.lr_model)
 
-    def predict(self, X: Union[np.ndarray, list]) -> np.ndarray:
+    def predict(self, X: Union[np.ndarray, list], matrix: bool = False) -> np.ndarray:
         X = np.asarray(X)
-        return np.dot(self.lr_model.coef_, X.flatten()) + self.lr_model.intercept_
+        if matrix:
+            return np.dot(self.lr_model.coef_, X.T).T + np.tile(self.lr_model.intercept_, (X.shape[0], 1))
+        else:
+            return np.dot(self.lr_model.coef_, X.flatten()) + self.lr_model.intercept_
 
 
 class PoseModelGMM:

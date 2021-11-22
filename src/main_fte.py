@@ -651,14 +651,14 @@ def run(root_dir: str,
     logger.info("Variable initialisation...Done")
 
     # ===== CONSTRAINTS =====
+    # Get the pose variables for each time instance to include in the constraints of the optimisation.
+    X = np.array([[m.x[n, p] for n in m.N] for p in m.P]).T
+    positions = np.array([pose_to_3d(*states) for states in X])
+
     # 3D POSE
     def pose_constraint(m, n, l, d3):
-        # Get 3d points
-        var_list = [m.x[n, p] for p in m.P]
-        if reduced_space:
-            var_list = pose_model.project(var_list, inverse=True)
-        [pos] = pos_funcs[l - 1](*var_list)
-        return pos[d3 - 1] == m.poses[n, l, d3]
+        # 3D points from the pose state.
+        return positions[n - 1, l - 1, d3 - 1] == m.poses[n, l, d3]
 
     m.pose_constraint = pyo.Constraint(m.N, m.L, m.D3, rule=pose_constraint)
 
@@ -681,12 +681,14 @@ def run(root_dir: str,
 
     if extra_constraints:
 
+        # Incorporate the prediction model as constraints.
+        df = data_ops.series_to_supervised(X, n_in=window_size, n_step=window_time)
+        X_in = df.to_numpy()[:, 0:(P * window_size)]
+        y_pred = motion_model.predict(X_in, matrix=True)
+
         def motion_constraint(m, n, p):
             if n > window_buf:
-                # Pred using LR model
-                X = [[m.x[n - w * window_time, i] for i in m.P] for w in range(window_size, 0, -1)]
-                y = motion_model.predict(X).tolist()
-                return m.x[n, p] - y[p - 1] - m.slack_motion[n, p] == 0.0
+                return m.x[n, p] - y_pred[n - window_buf - 1, p - 1] - m.slack_motion[n, p] == 0.0
             else:
                 return pyo.Constraint.Skip
 
