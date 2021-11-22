@@ -1,34 +1,245 @@
 import os
-import platform
 import json
-import random
 from typing import Union, Tuple, Dict, List
 import numpy as np
+from tqdm import tqdm
+from argparse import ArgumentParser
+
 from pyomo.core.expr.current import log as pyomo_log
 import sympy as sp
 import pandas as pd
 from glob import glob
 from time import time
-from tqdm import tqdm
 from scipy.interpolate import UnivariateSpline
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 from lib import misc, utils, app, metric
 from lib.calib import triangulate_points_fisheye, project_points_fisheye
-from py_utils import data_ops, log
-from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import Pipeline
-from sklearn.decomposition import PCA
-from sklearn.model_selection import train_test_split
-from sklearn import preprocessing
-
 import matplotlib.pyplot as plt
 
-plt.style.use(os.path.join("../configs", "mechatronics_style.yaml"))
+plt.style.use(os.path.join('../configs', 'mechatronics_style.yaml'))
 
-# Create a module logger with the name of this file.
-logger = log.logger(__name__)
+def validate_dataset(root_dir: str) -> List:
+    markers = misc.get_markers()
+    coords = ['x', 'y', 'z']
 
+    # get velocity of virtual body
+    def get_velocity(position, h):
+        # body COM approximated as mean of tail base, spine and neck points
+        body_x = np.mean([position[m, 'x'] for m in ['tail_base', 'spine', 'neck_base']],0)
+        body_y = np.mean([position[m, 'y'] for m in ['tail_base', 'spine', 'neck_base']],0)
+        body_z = np.mean([position[m, 'z'] for m in ['tail_base', 'spine', 'neck_base']],0)
+
+        body_dx = (body_x[1:]-body_x[:-1])/h
+        body_dy = (body_y[1:]-body_y[:-1])/h
+        body_dz = (body_z[1:]-body_z[:-1])/h
+
+        body_v = np.sqrt(body_dx**2 + body_dy**2 + body_dz**2)
+        return body_v
+
+    # extract position data from individual pickle file
+    def extract_data(filename):
+        data = utils.load_pickle(filename)
+
+        position = {}
+        for m_i,m in enumerate(markers):
+            for c_i,c in enumerate(coords):
+                    position.update({(m,c):np.array([data['positions'][f][m_i][c_i] for f in range(len(data['positions']))])})
+        # flip direction if running towards -x
+        if position['neck_base','x'][-1] < position['neck_base','x'][0]:
+            for m in markers:
+                for c in ['x','y']:
+                    position[m,c] = -position[m,c]
+        return position
+
+    bad_trajectories = []
+    fte_fpaths = sorted(glob(os.path.join(root_dir, "**/fte.pickle"), recursive=True))
+    for fpath in fte_fpaths:
+        position = extract_data(fpath)
+        temp = fpath.split(root_dir)[1]
+        info = temp.split(os.sep)
+        date = info[1]
+        # sanity checks
+        fail = 0
+        h = 1/90
+        if date[:4] == '2017': h = 1/90
+        if date[:4] == '2019': h = 1/120
+        body_v = get_velocity(position, h)
+        if np.max(np.abs(body_v)) > 50: # if velocity implausibly high
+            fail += 1
+        for m in markers:
+            if np.min(position[m, 'z']) < -0.3: # goes too deep
+                fail += 1
+            if m not in ['tail_base', 'tail1', 'tail2'] and np.max(position[m, 'z']) > 1: # goes too high
+                fail += 1
+
+        if fail != 0:
+            bad_trajectories.append(os.sep.join(info[1:-2]))
+
+    return bad_trajectories
+
+def run_acinoset(root_dir: str, video_data: Dict, out_dir_prefix: str):
+    """
+    Runs through the video list in AcinoSet and performs the 3D reconstruction for each video.
+    Args:
+        root_dir: The root directory where the videos are stored, along with the `pose_3d_functions.pickle` file, and `gt_labels` directory.
+        video_data: The list of videos stored in a dictionary with a key `test_dirs` for each directory in AcinoSet.
+        out_dir_prefix: Used to change the output directory from the root. This is often used if you have the cheetah data stored in a location and you want the output to be saved elsewhere.
+    """
+    import gc
+    tests = video_data['test_dirs']
+    manually_selected_frames = {
+        '2019_03_03/phantom/run': (73, 272),
+        '2017_12_12/top/cetane/run1_1': (100, 241),
+        '2019_03_05/jules/run': (58, 176),
+        '2019_03_09/lily/run': (80, 180),
+        '2017_09_03/top/zorro/run1_2': (20, 120),
+        '2017_08_29/top/phantom/run1_1': (20, 170),
+        '2017_12_21/top/lily/run1': (7, 106),
+        '2019_03_03/menya/run': (20, 130),
+        '2017_12_10/top/phantom/run1': (30, 130),
+        '2017_09_03/bottom/zorro/run2_1': (126, 325),
+        '2019_02_27/ebony/run': (20, 200),
+        '2017_12_09/bottom/phantom/run2': (18, 117),
+        '2017_09_03/bottom/zorro/run2_3': (1, 200),
+        '2017_08_29/top/jules/run1_1': (10, 110),
+        '2017_09_02/top/jules/run1': (10, 110),
+        '2019_03_07/menya/run': (60, 160),
+        '2017_09_02/top/phantom/run1_2': (20, 160),
+        '2019_03_05/lily/run': (150, 250),
+        '2017_12_12/top/cetane/run1_2': (3, 202),
+        '2019_03_07/phantom/run': (100, 200),
+        '2019_02_27/romeo/run': (12, 190),
+        '2017_08_29/top/jules/run1_2': (30, 130),
+        '2017_12_16/top/cetane/run1': (110, 210),
+        '2017_09_02/top/phantom/run1_1': (33, 150),
+        '2017_09_02/top/phantom/run1_3': (35, 135),
+        '2017_09_03/top/zorro/run1_1': (4, 203),
+        '2019_02_27/kiara/run': (10, 110),
+        '2017_09_02/bottom/jules/run2': (35, 171),
+        '2017_09_03/bottom/zorro/run2_2': (32, 141),
+        '2019_03_05/lily/flick': (100, 200),
+        '2017_08_29/top/zorro/flick1_2': (20, 140),
+        '2017_09_02/bottom/phantom/flick2_1': (5, 100),
+        '2017_12_12/bottom/big_girl/flick2': (30, 100),
+        '2019_03_03/phantom/flick': (270, 460),
+        '2019_03_09/lily/flick': (10, 100),
+        '2019_03_09/jules/flick2': (80, 185),
+        '2017_09_03/top/zorro/flick1_1': (62, 150),
+        '2017_12_21/top/lily/flick1': (40, 180),
+        '2017_12_21/bottom/jules/flick2_1': (50, 200),
+        '2017_09_03/top/phantom/flick1': (100, 240),
+        '2017_09_02/top/jules/flick1_1': (60, 200),
+        '2017_08_29/top/phantom/flick1_1': (50, 200)
+    }
+
+    bad_videos = ('2017_09_03/bottom/phantom/flick2', '2017_09_02/top/phantom/flick1_1', '2017_12_17/top/zorro/flick1')
+    time0 = time()
+    print('Run reconstruction on all videos...')
+    # Initialise the Ipopt solver.
+    optimiser = SolverFactory('ipopt', executable='/home/zico/lib/ipopt/build/bin/ipopt')
+    # solver options
+    optimiser.options['print_level'] = 5
+    optimiser.options['max_iter'] = 400
+    optimiser.options['max_cpu_time'] = 10000
+    optimiser.options['Tol'] = 1e-1
+    optimiser.options['OF_print_timing_statistics'] = 'yes'
+    optimiser.options['OF_print_frequency_time'] = 10
+    optimiser.options['OF_hessian_approximation'] = 'limited-memory'
+    optimiser.options['OF_accept_every_trial_step'] = 'yes'
+    optimiser.options['linear_solver'] = 'ma86'
+    optimiser.options['OF_ma86_scaling'] = 'none'
+    for test_vid in tqdm(tests):
+        # Force garbage collection so that the repeated model creation does not overflow the memory!
+        gc.collect()
+        current_dir = test_vid.split('/cheetah_videos/')[1]
+        # Filter parameters based on past experience.
+        if current_dir in bad_videos:
+            # Skip these videos because of erroneous input data.
+            continue
+        start = 1
+        end = -1
+        if current_dir in set(manually_selected_frames.keys()):
+            start = manually_selected_frames[current_dir][0]
+            end = manually_selected_frames[current_dir][1]
+        try:
+            run(root_dir,
+                current_dir,
+                start_frame=start,
+                end_frame=end,
+                dlc_thresh=0.5,
+                enable_shutter_delay=True,
+                enable_ppms=True if 'flick' in current_dir else False,
+                opt=optimiser,
+                generate_reprojection_videos=True,
+                out_dir_prefix=out_dir_prefix)
+        except Exception:
+            run(root_dir,
+                current_dir,
+                start_frame=-1,
+                end_frame=1,
+                dlc_thresh=0.5,
+                enable_shutter_delay=True,
+                enable_ppms=True if 'flick' in current_dir else False,
+                opt=optimiser,
+                generate_reprojection_videos=True,
+                out_dir_prefix=out_dir_prefix)
+
+    time1 = time()
+    print(f'Run through all videos took {time1 - time0:.2f}s')
+
+def acinoset_comparison(root_dir: str, use_3D_gt: bool = False) -> Dict:
+    """
+    Generates results for a subset of videos from AcinoSet for each method: FTE, SD-FTE, PW-FTE, PW-SD-FTE.
+    Args:
+        root_dir: The root directory where the videos are stored, along with the `pose_3d_functions.pickle` file, and `gt_labels` directory.
+        use_3D_gt: Flag to select 3D ground truth for evaluation. Defaults to False.
+    Returns:
+        results in a dictionary.
+    """
+    if not use_3D_gt:
+        data_paths = [os.path.join('2019_03_09', 'jules', 'flick2'), os.path.join('2019_03_09', 'lily', 'flick'),
+        os.path.join('2017_12_16', 'bottom', 'phantom', 'flick2_1'), os.path.join('2017_09_03', 'top', 'zorro', 'flick1_1')]
+        frames = [(80, 180), (10, 110), (140, 240), (60, 200)]
+    else:
+        data_paths = [os.path.join('2019_03_09', 'jules', 'flick2'), os.path.join('2017_09_03', 'top', 'zorro', 'flick1_1')]
+        frames = [(80, 180), (60, 200)]
+    dlc_thresh = 0.5
+    # Initialise the Ipopt solver.
+    optimiser = SolverFactory('ipopt', executable='/home/zico/lib/ipopt/build/bin/ipopt')
+    # solver options
+    optimiser.options['print_level'] = 5
+    optimiser.options['max_iter'] = 400
+    optimiser.options['max_cpu_time'] = 10000
+    optimiser.options['Tol'] = 1e-1
+    optimiser.options['OF_print_timing_statistics'] = 'yes'
+    optimiser.options['OF_print_frequency_time'] = 10
+    optimiser.options['OF_hessian_approximation'] = 'limited-memory'
+    optimiser.options['OF_accept_every_trial_step'] = 'yes'
+    optimiser.options['linear_solver'] = 'ma86'
+    optimiser.options['OF_ma86_scaling'] = 'none'
+
+    results = {'fte': {}, 'sd_fte': {}, 'pw_fte': {}, 'pw_sd_fte': {}}
+    for i, data_path in enumerate(data_paths):
+        for test in results.keys():
+            # Run the optimisation
+            run(root_dir,
+                data_path,
+                start_frame=frames[i][0],
+                end_frame=frames[i][1],
+                dlc_thresh=dlc_thresh,
+                opt=optimiser,
+                enable_shutter_delay=True if 'sd' in test else False,
+                enable_ppms=True if 'pw' in test else False)
+            # Produce results
+            results[test][data_path] = metrics(root_dir,
+                                            data_path,
+                                            start_frame=frames[i][0],
+                                            end_frame=frames[i][1],
+                                            dlc_thresh=dlc_thresh,
+                                            use_3D_gt=use_3D_gt,
+                                            type_3D_gt=test)
+    return results
 
 def metrics(
     root_dir: str,
@@ -36,43 +247,60 @@ def metrics(
     start_frame: int,
     end_frame: int,
     dlc_thresh: float = 0.5,
+    use_3D_gt: bool = False,
+    type_3D_gt: str = "fte",
     out_dir_prefix: str = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-
+) -> Tuple[float, float, float]:
+    """
+    Generate metrics for a particular reconstruction. Note, the `fte.pickle` needs to be generated prior to calling this function.
+    Args:
+        root_dir: The root directory where the videos are stored.
+        data_path: Path to video set of interest.
+        start_frame: The start frame number. Note, this value is deducted by `-1` to compensate for `0` based indexing.
+        end_frame: The end frame number.
+        dlc_thresh: The DLC confidence score to filter 2D keypoints. Defaults to 0.5.
+        use_3D_gt: Flag to select 3D ground truth for evaluation. Defaults to False.
+        type_3D_gt: Sets the type of 3D ground truth to expect. Valid values are fte, pw_fte, sd_fte, pw_sd_fte.
+        out_dir_prefix: Used to change the output directory from the root. This is often used if you have the cheetah data stored in a location and you want the output to be saved elsewhere.
+    Returns:
+        A tuple consisting of the mean error [px], median error [px], and PCK [%].
+    """
     if out_dir_prefix:
-        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw")
+        out_dir = os.path.join(out_dir_prefix, data_path, type_3D_gt)
     else:
-        out_dir = os.path.join(root_dir, data_path, "fte_pw")
+        out_dir = os.path.join(root_dir, data_path, type_3D_gt)
     # load DLC data
     data_dir = os.path.join(root_dir, data_path)
-    dlc_dir = os.path.join(data_dir, "dlc")
+    dlc_dir = os.path.join(data_dir, 'dlc')
     assert os.path.exists(dlc_dir)
 
     try:
         k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
     except Exception:
-        logger.error("Early exit because extrinsic calibration files could not be located")
+        print('Early exit because extrinsic calibration files could not be located')
         return []
     d_arr = d_arr.reshape((-1, 4))
 
-    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
-    assert n_cams == len(dlc_points_fpaths), f"# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json"
+    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
+    assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json'
 
     # calculate residual error
-    states = data_ops.load_pickle(os.path.join(out_dir, "fte.pickle"))
+    states = utils.load_pickle(os.path.join(out_dir, 'fte.pickle'))
     markers = misc.get_markers()
-    data_location = data_path.split("/")
+    data_location = data_path.split('/')
     test_data = [loc.capitalize() for loc in data_location]
-    gt_data = str.join("", test_data)
-    gt_data = gt_data.replace("Top", "").replace("Bottom", "")
-    gt_points_3d_df = None
-    try:
-        points_2d_df = pd.read_csv(os.path.join("/Users/zico/msc/data/gt_labels", gt_data, f"{gt_data}.csv"))
-        # gt_points_3d_df = pd.read_csv(os.path.join("/Users/zico/msc/data/gt_labels", gt_data, f"{gt_data}_3D.csv"))
-    except FileNotFoundError:
-        logger.warning("No ground truth labels for this test.")
+    gt_name = str.join('', test_data)
+    gt_name = gt_name.replace('Top', '').replace('Bottom', '')
+
+    gt_points_fpaths = sorted(glob(os.path.join(os.path.join(root_dir, 'gt_labels', gt_name), '*.h5')))
+    if not use_3D_gt and len(gt_points_fpaths) > 0:
+        points_2d_df = utils.load_dlc_points_as_df(gt_points_fpaths, verbose=False)
+    elif use_3D_gt:
+        points_2d_df = pd.read_csv(os.path.join(root_dir, 'gt_labels', gt_name, f'{gt_name}_{type_3D_gt}.csv'))
+    else:
+        print('No ground truth labels for this test.')
         points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
-        points_2d_df = points_2d_df[points_2d_df["likelihood"] > dlc_thresh]  # ignore points with low likelihood
+        points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]  # ignore points with low likelihood
 
     positions_3ds = misc.get_all_marker_coords_from_states(states, n_cams)
     points_3d_dfs = []
@@ -87,278 +315,40 @@ def metrics(
             points_3d.append(_pt3d)
         points_3d_df = pd.DataFrame(
             np.vstack(points_3d),
-            columns=["frame", "marker", "x", "y", "z"],
+            columns=['frame', 'marker', 'x', 'y', 'z'],
         ).astype({
-            "frame": "int64",
-            "marker": "str",
-            "x": "float64",
-            "y": "float64",
-            "z": "float64"
+            'frame': 'int64',
+            'marker': 'str',
+            'x': 'float64',
+            'y': 'float64',
+            'z': 'float64'
         })
         points_3d_dfs.append(points_3d_df)
     px_errors = metric.residual_error(points_2d_df, points_3d_dfs, markers,
                                       (k_arr, d_arr, r_arr, t_arr, cam_res, n_cams))
-    save_error_dists(px_errors, out_dir)
+    mean_error, med_error, pck = _save_error_dists(px_errors, out_dir)
 
     # Calculate the per marker error and save results.
     marker_errors_2d = dict.fromkeys(markers, [])
-    marker_errors_3d = dict.fromkeys(markers, [])
     # Calculate the number of measurements included for each marker.
-    meas_weights = states.get("meas_weight")
+    meas_weights = states.get('meas_weight')
     num_included_meas = dict.fromkeys(markers, 0)
     for i, m in enumerate(markers):
         marker_meas_weights = meas_weights[:, :, i, :].flatten()
         num_included_meas[m] = 100.0 * (((marker_meas_weights != 0.0).sum()) / len(marker_meas_weights))
         temp_dist = []
         for k, df in px_errors.items():
-            temp_dist += df.query(f"marker == '{m}'")["pixel_residual"].tolist()
+            temp_dist += df.query(f'marker == "{m}"')['pixel_residual'].tolist()
         marker_errors_2d[m] = np.asarray(list(map(float, temp_dist)))
 
-    meas_stats_df = pd.DataFrame(num_included_meas, index=["%"])
+    meas_stats_df = pd.DataFrame(num_included_meas, index=['%'])
     error_df = pd.DataFrame(
         pd.DataFrame(dict([(k, pd.Series(v))
-                           for k, v in marker_errors_2d.items()])).describe(include="all")).transpose()
-    error_df.to_csv(os.path.join(out_dir, "reprojection_results.csv"))
-    meas_stats_df.to_csv(os.path.join(out_dir, "measurement_results.csv"))
+                           for k, v in marker_errors_2d.items()])).describe(include='all')).transpose()
+    error_df.to_csv(os.path.join(out_dir, 'reprojection_results.csv'))
+    meas_stats_df.to_csv(os.path.join(out_dir, 'measurement_results.csv'))
 
-    if gt_points_3d_df is not None:
-        pos_errors = metric.residual_error_3d(gt_points_3d_df, points_3d_dfs[0], markers)
-        marker_errors_3d = dict.fromkeys(markers, [])
-        for i, m in enumerate(markers):
-            temp_dist = pos_errors.query(f"marker == '{m}'")["position_error_mm"].tolist()
-            marker_errors_3d[m] = np.asarray(list(map(float, temp_dist)))
-
-        error_3d_df = pd.DataFrame(
-            pd.DataFrame(dict([(k, pd.Series(v))
-                               for k, v in marker_errors_3d.items()])).describe(include="all")).transpose()
-        error_3d_df.to_csv(os.path.join(out_dir, "position_error_summary.csv"))
-        pos_errors.to_csv(os.path.join(out_dir, "position_error.csv"))
-
-    return error_df, meas_stats_df
-
-
-def save_error_dists(px_errors, output_dir: str):
-    # Calculated PCK threshold from the training dataset average nose to eye(s) length.
-    # pck_threshold = 15.3686
-    ratio = 0.5
-    distances = []
-    pck_threshold = []
-    # residuals_u = []
-    # residuals_v = []
-    for k, df in px_errors.items():
-        distances += df["pixel_residual"].tolist()
-        pck_threshold += df["pck_threshold"].tolist()
-        # residuals_u += df["error_u"].tolist()
-        # residuals_v += df["error_v"].tolist()
-    distances = np.asarray(list(map(float, distances)))
-    pck_threshold = np.asarray(list(map(float, pck_threshold)))
-    # residuals_u = list(map(float, residuals_u))
-    # residuals_v = list(map(float, residuals_v))
-    # residuals = np.vstack((residuals_u, residuals_v)).T
-
-    pck = 100.0 * (np.sum(distances <= (ratio * pck_threshold)) / len(distances))
-    data_ops.save_pickle(os.path.join(output_dir, "reprojection.pickle"), {"error": distances, "pck": pck})
-
-    # plot the error histogram
-    xlabel = "Error [px]"
-    ylabel = "Frequency"
-
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-    ax.hist(distances, bins=50)
-    ax.set_title(
-        f"Error Overview (N={len(distances)}, \u03BC={np.mean(distances):.3f}, med={np.median(distances):.3f}, PCK={pck:.3f})"
-    )
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    fig.savefig(os.path.join(output_dir, "overall_error_hist.pdf"))
-
-    hist_data = []
-    labels = []
-    for k, df in px_errors.items():
-        i = int(k)
-        e = df["pixel_residual"].tolist()
-        e = list(map(float, e))
-        hist_data.append(e)
-        labels.append("cam{} (N={})".format(i + 1, len(e)))
-
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-    ax.hist(hist_data, bins=10, density=True, histtype="bar")
-    ax.legend(labels)
-    ax.set_title("Reprojection Pixel Error")
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    fig.savefig(os.path.join(output_dir, "cams_error_hist.pdf"))
-
-
-def train_motion_model(window_size: int) -> Tuple[Pipeline, np.ndarray]:
-    logger.info("Train motion prediction model")
-    model_dir = "/Users/zico/msc/data/CheetahRuns/v2/model"
-    p_idx = misc.get_pose_params()
-    pose_states = p_idx.keys()
-    num_vars = len(pose_states)
-    df = pd.read_hdf(os.path.join(model_dir, "dataset.h5"))
-    df_input = data_ops.series_to_supervised(df, window_size)
-    # Modify the dataframe to discard the window size at the start of separate trajectory.
-    del_indices = [i for i in range(window_size)]
-    df_input.drop(index=del_indices, inplace=True)
-
-    # pipeline = Pipeline(steps=[("normalize",
-    #                             preprocessing.MinMaxScaler()), ("pca",
-    #                                                             PCA(n_components=n_comps)), ("model",
-    #                                                                                          LinearRegression())])
-    pipeline = Pipeline(steps=[("model", LinearRegression())])
-    xy_set = df_input.to_numpy()
-    X = xy_set[:, 0:(num_vars * window_size)]
-    y = xy_set[:, (num_vars * window_size):]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-    logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
-    logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
-    pipeline.fit(X_train, y_train)
-
-    y_pred = pipeline.predict(X_test)
-    residuals = y_test - y_pred
-    variance = np.var(residuals, axis=0)
-
-    return pipeline, np.asarray(variance)
-
-
-def measurements_to_df(m: pyo.ConcreteModel):
-    # Generate dataframe with the measurements that are used in the optimisation.
-    # This allows for inspection of the normal and pairwise predictions used in the FTE.
-    measurement_dir = os.path.join(out_directory, "measurements")
-    os.makedirs(measurement_dir, exist_ok=True)
-    markers = misc.get_markers()
-    xy_labels = ["x", "y"]
-    pd_index = pd.MultiIndex.from_product([markers, xy_labels], names=["bodyparts", "coords"])
-    for c in m.C:
-        for w in m.W:
-            included_measurements = []
-            for n in m.N:
-                included_measurements.append([])
-                for l in m.L:
-                    if m.meas_err_weight[n, c, l, w] != 0.0:
-                        included_measurements[n - 1].append([m.meas[n, c, l, 1, w], m.meas[n, c, l, 2, w]])
-                    else:
-                        included_measurements[n - 1].append([float("NaN"), float("NaN")])
-            measurements = np.array(included_measurements)
-            n_frames = len(measurements)
-            df = pd.DataFrame(measurements.reshape((n_frames, -1)),
-                              columns=pd_index,
-                              index=range(start, start + n_frames))
-            # df.to_csv(os.path.join(OUT_DIR, "measurements", f"cam{c}_fte.csv"))
-            df.to_hdf(os.path.join(measurement_dir, f"cam{c}_pw_{w}.h5"), "df_with_missing", format="table", mode="w")
-
-
-def get_vals_v(var: Union[pyo.Var, pyo.Param], idxs: list) -> np.ndarray:
-    """
-    Verbose version that doesn"t try to guess stuff for ya. Usage:
-    >>> get_vals(m.q, (m.N, m.DOF))
-    """
-    arr = np.array([pyo.value(var[idx]) for idx in var]).astype(float)
-    return arr.reshape(*(len(i) for i in idxs))
-
-
-def pyo_i(i: int) -> int:
-    return i + 1
-
-
-def plot_trajectory(fte_file: str, scene_file: str, centered=False):
-    app.plot_cheetah_reconstruction(fte_file,
-                                    scene_fname=scene_file,
-                                    reprojections=False,
-                                    dark_mode=True,
-                                    centered=centered)
-
-
-def compare_trajectories(fte_file1: str, fte_file2: str, scene_file: str, centered=False):
-    app.plot_multiple_cheetah_reconstructions([fte_file1, fte_file2],
-                                              scene_fname=scene_file,
-                                              reprojections=False,
-                                              dark_mode=True,
-                                              centered=centered)
-
-
-def plot_cheetah(root_dir: str, data_dir: str, out_dir_prefix: str = None, plot_reprojections=False, centered=False):
-    fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
-    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
-    if out_dir_prefix is not None:
-        fte_file = os.path.join(out_dir_prefix, data_dir, "fte_pw", "fte.pickle")
-    app.plot_cheetah_reconstruction(fte_file,
-                                    scene_fname=scene_fpath,
-                                    reprojections=plot_reprojections,
-                                    dark_mode=False,
-                                    centered=centered)
-
-
-def compare_cheetahs(test_fte_file: str,
-                     root_dir: str,
-                     data_dir: str,
-                     out_dir_prefix: str = None,
-                     plot_reprojections=False,
-                     centered=False):
-    fte_file = os.path.join(root_dir, data_dir, "fte_pw", "fte.pickle")
-    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
-    if out_dir_prefix is not None:
-        fte_file = os.path.join(out_dir_prefix, data_dir, "fte_pw", "fte.pickle")
-    app.plot_multiple_cheetah_reconstructions([fte_file, test_fte_file],
-                                              scene_fname=scene_fpath,
-                                              reprojections=plot_reprojections,
-                                              dark_mode=True,
-                                              centered=centered)
-
-
-def plot_cost_functions():
-    import matplotlib.pyplot as plt
-    # cost function
-    redesc_a = 5
-    redesc_b = 15
-    redesc_c = 30
-    r_x = np.arange(-100, 100, 1e-1)
-    r_y1 = [misc.redescending_loss(i, redesc_a, redesc_b, redesc_c) for i in r_x]
-    r_y2 = [misc.cauchy_loss(i, 7, np.log) for i in r_x]
-    r_y3 = r_x**2
-    r_y4 = [misc.fair_loss(i, redesc_b, np.log) for i in r_x]
-    plt.figure()
-    plt.plot(r_x, r_y1, label="Redescending")
-    plt.plot(r_x, r_y2, label="Cauchy")
-    plt.plot(r_x, r_y4, label="Fair")
-    plt.plot(r_x, r_y3, label="LSQ")
-    ax = plt.gca()
-    ax.set_ylim((-5, 500))
-    ax.legend()
-    plt.show(block=True)
-
-
-def loss_function(residual: float, loss="redescending") -> float:
-    if loss == "redescending":
-        return misc.redescending_loss(residual, 3, 10, 20)
-    elif loss == "cauchy":
-        return misc.cauchy_loss(residual, 7, pyomo_log)
-    elif loss == "fair":
-        return misc.fair_loss(residual, 10, pyomo_log)
-    elif loss == "lsq":
-        return residual**2
-
-    return 0.0
-
-
-def create_pose_functions(data_dir: str):
-    # symbolic vars
-    idx = misc.get_pose_params()
-    sym_list = sp.symbols(list(idx.keys()))
-    positions = misc.get_3d_marker_coords(sym_list)
-
-    func_map = {"sin": pyo.sin, "cos": pyo.cos, "ImmutableDenseMatrix": np.array}
-    pose_to_3d = sp.lambdify(sym_list, positions, modules=[func_map])
-    pos_funcs = []
-    for i in range(positions.shape[0]):
-        lamb = sp.lambdify(sym_list, positions[i, :], modules=[func_map])
-        pos_funcs.append(lamb)
-
-    # Save the functions to file.
-    data_ops.save_dill(os.path.join(data_dir, "pose_3d_functions_with_paws.pickle"), (pose_to_3d, pos_funcs))
+    return mean_error, med_error, pck
 
 
 def run(root_dir: str,
@@ -366,77 +356,82 @@ def run(root_dir: str,
         start_frame: int,
         end_frame: int,
         dlc_thresh: float,
-        loss="redescending",
-        filtered_markers: Tuple = (),
-        drop_out_frames: List[int] = [],
-        pairwise_included: int = 0,
+        loss='redescending',
+        enable_ppms: bool = False,
         enable_shutter_delay: bool = False,
-        single_view: int = 0,
-        init_ekf=False,
         opt=None,
-        out_dir_prefix: str = None,
         generate_reprojection_videos: bool = False,
-        export_measurements: bool = False):
-    logger.info("Prepare data - Start")
+        out_dir_prefix: str = None,) -> None:
+    """
+    Runs the FTE 3D reconstruction.
+    Args:
+        root_dir: The root directory where the videos are stored.
+        data_path: Path to video set of interest.
+        start_frame: The start frame number. Note, this value is deducted by `-1` to compensate for `0` based indexing.
+        end_frame: The end frame number.
+        dlc_thresh: The DLC confidence score to filter 2D keypoints. Defaults to 0.5.
+        loss: Select the loss function to use for the measurement cost, either squared loss or redecending. Defaults to 'redescending'.
+        enable_ppms: Flag to indicate if the pairwise pseudo-measurements should be incorporated into the optimisation. Defaults to False.
+        enable_shutter_delay: Flag to indicate if shutter delay correction should be performed. Defaults to False.
+        opt: A instance of the Pyomo optimiser. This is useful if you are calling this function in a loop; preventing re-initialisation of the optimiser. Defaults to None.
+        generate_reprojection_videos: Flag to enable the generation of 2D reprojection videos. Defaults to False.
+        out_dir_prefix: Used to change the output directory from the root. This is often used if you have the cheetah data stored in a location and you want the output to be saved elsewhere.
+    """
+    print('Prepare data - Start')
 
     t0 = time()
-
+    out_dir_name = 'fte'
+    if enable_shutter_delay:
+        out_dir_name = 'sd_' + out_dir_name
+    if enable_ppms:
+        out_dir_name = 'pw_' + out_dir_name
     if out_dir_prefix:
-        out_dir = os.path.join(out_dir_prefix, data_path, "fte_pw" if single_view == 0 else f"fte_pw_{single_view}")
+        out_dir = os.path.join(out_dir_prefix, data_path, out_dir_name)
     else:
-        out_dir = os.path.join(root_dir, data_path, "fte_pw" if single_view == 0 else f"fte_pw_{single_view}")
+        out_dir = os.path.join(root_dir, data_path, out_dir_name)
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
-    dlc_dir = os.path.join(data_dir, "dlc")
+    dlc_dir = os.path.join(data_dir, 'dlc')
     assert os.path.exists(dlc_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    app.start_logging(os.path.join(out_dir, "fte.log"))
+    app.start_logging(os.path.join(out_dir, 'fte.log'))
 
     # ========= IMPORT CAMERA & SCENE PARAMS ========
     try:
         k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
     except Exception:
-        logger.error("Early exit because extrinsic calibration files could not be located")
+        print('Early exit because extrinsic calibration files could not be located')
         return
     d_arr = d_arr.reshape((-1, 4))
 
     # load video info
-    res, fps, num_frames = 0, 0, 0
-    if platform.python_implementation() == "CPython":
-        res, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
-        assert res == cam_res
-    elif platform.python_implementation() == "PyPy":
-        fps = 120 if "2019" in data_dir else 90
+    res, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
+    assert res == cam_res
 
     # load DLC data
-    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
-    assert n_cams == len(dlc_points_fpaths), f"# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json"
+    dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
+    assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json'
 
     # load measurement dataframe (pixels, likelihood)
     points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
-    filtered_points_2d_df = points_2d_df[points_2d_df["likelihood"] > dlc_thresh]  # ignore points with low likelihood
+    filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]  # ignore points with low likelihood
 
-    if platform.python_implementation() == "PyPy":
-        # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
-        # So instead I manually get the number of frames and the frame rate based (determined above).
-        num_frames = points_2d_df["frame"].max() + 1
-
-    assert 0 != start_frame < num_frames, f"start_frame must be strictly between 0 and {num_frames}"
-    assert 0 != end_frame <= num_frames, f"end_frame must be less than or equal to {num_frames}"
-    assert 0 <= dlc_thresh <= 1, "dlc_thresh must be from 0 to 1"
+    assert 0 != start_frame < num_frames, f'start_frame must be strictly between 0 and {num_frames}'
+    assert 0 != end_frame <= num_frames, f'end_frame must be less than or equal to {num_frames}'
+    assert 0 <= dlc_thresh <= 1, 'dlc_thresh must be from 0 to 1'
 
     if end_frame == -1:
         # Automatically set start and end frame
         # defining the first and end frame as detecting all the markers on any of cameras simultaneously
         target_markers = misc.get_markers()
-        markers_condition = " or ".join([f"marker=='{ref}'" for ref in target_markers])
+        markers_condition = ' or '.join([f'marker=="{ref}"' for ref in target_markers])
         num_marker = lambda i: len(
-            filtered_points_2d_df.query(f"frame == {i} and ({markers_condition})")["marker"].unique())
+            filtered_points_2d_df.query(f'frame == {i} and ({markers_condition})')['marker'].unique())
 
         start_frame, end_frame = -1, -1
-        max_idx = points_2d_df["frame"].max() + 1
+        max_idx = points_2d_df['frame'].max() + 1
         for i in range(max_idx):
             if num_marker(i) == len(target_markers):
                 start_frame = i
@@ -446,7 +441,7 @@ def run(root_dir: str,
                 end_frame = i
                 break
         if start_frame == -1 or end_frame == -1:
-            raise Exception("Setting frames failed. Please define start and end frames manually.")
+            raise Exception('Setting frames failed. Please define start and end frames manually.')
     elif start_frame == -1:
         # Use the entire video.
         start_frame = 1
@@ -455,7 +450,7 @@ def run(root_dir: str,
         # User-defined frames
         start_frame = start_frame - 1  # 0 based indexing
         end_frame = end_frame % num_frames + 1 if end_frame == -1 else end_frame
-    assert len(k_arr) == points_2d_df["camera"].nunique()
+    assert len(k_arr) == points_2d_df['camera'].nunique()
 
     N = end_frame - start_frame
     Ts = 1.0 / fps  # timestep
@@ -471,7 +466,13 @@ def run(root_dir: str,
         N = end_frame - start_frame
 
     ## ========= POSE FUNCTIONS ========
-    pose_to_3d, pos_funcs = data_ops.load_dill(os.path.join(root_dir, "pose_3d_functions_with_paws.pickle"))
+    try:
+        pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions.pickle'))
+    except FileNotFoundError:
+        print('Lambdify pose functions and save to file for re-use in the future...')
+        _create_pose_functions(root_dir)
+
+    pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions.pickle'))
     idx = misc.get_pose_params()
     sym_list = list(idx.keys())
 
@@ -545,10 +546,8 @@ def run(root_dir: str,
         ]
     ],
                     dtype=float)
+    # Provides some extra uncertainty to the measurements to accomodate for the rigid body body assumption.
     R_pw *= 1.5
-    # R_pw[0, :] = 5.0
-    # R_pw[1, :] = 10.0
-    # R_pw[2, :] = 15.0
 
     Q = [  # model parameters variance
         4,
@@ -586,18 +585,18 @@ def run(root_dir: str,
     #===================================================
     #                   Load in data
     #===================================================
-    logger.info("Load H5 2D DLC prediction data")
-    df_paths = sorted(glob(os.path.join(dlc_dir, "*.h5")))
+    print('Load H5 2D DLC prediction data')
+    df_paths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
 
     points_3d_df = utils.get_pairwise_3d_points_from_df(filtered_points_2d_df, k_arr, d_arr, r_arr, t_arr,
                                                         triangulate_points_fisheye)
 
     # estimate initial points
-    logger.info("Estimate the initial trajectory")
+    print('Estimate the initial trajectory')
     # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
     frame_est = np.arange(end_frame)
 
-    nose_pts = points_3d_df[points_3d_df["marker"] == "nose"][["frame", "x", "y", "z"]].values
+    nose_pts = points_3d_df[points_3d_df['marker'] == 'nose'][['frame', 'x', 'y', 'z']].values
     nose_pts[:, 1] = nose_pts[:, 1] - 0.055
     nose_pts[:, 3] = nose_pts[:, 3] + 0.055
     traj_est_x = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 1])
@@ -626,8 +625,8 @@ def run(root_dir: str,
     for path in df_paths:
         # Pairwise correspondence data.
         h5_filename = os.path.basename(path)
-        pw_data[cam_idx] = data_ops.load_pickle(
-            os.path.join(dlc_dir + "_pw", f"{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle"))
+        pw_data[cam_idx] = utils.load_pickle(
+            os.path.join(dlc_dir + '_pw', f'{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle'))
         df_temp = pd.read_hdf(os.path.join(dlc_dir, h5_filename))
         base_data[cam_idx] = list(df_temp.to_numpy())
         cam_idx += 1
@@ -640,33 +639,24 @@ def run(root_dir: str,
         end_frame = min_num_frames
         N = end_frame - start_frame
 
-    # Train motion model and make predictions with a predefined window size.
-    window_size = 2
-    num_vars = len(idx.keys())
-    pipeline = None
-    if single_view > 0:
-        pipeline, pred_var = train_motion_model(window_size)
-    logger.info("Prepare data - End")
+    print('Prepare data - End')
 
     # save parameters
-    with open(os.path.join(out_dir, "reconstruction_params.json"), "w") as f:
-        json.dump(dict(start_frame=start_frame, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
+    with open(os.path.join(out_dir, 'reconstruction_params.json'), 'w') as f:
+        json.dump(dict(start_frame=start_frame+1, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
 
-    logger.info(f"Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}")
+    print(f'Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}')
 
     #===================================================
     #                   Optimisation
     #===================================================
-    logger.info("Setup optimisation - Start")
-    m = pyo.ConcreteModel(name="Cheetah from measurements")
+    print('Setup optimisation - Start')
+    m = pyo.ConcreteModel(name='Cheetah from measurements')
     m.Ts = Ts
     # ===== SETS =====
     P = len(list(sym_list))  # number of pose parameters
     L = len(markers)  # number of dlc labels per frame
     C = len(k_arr)  # number of cameras
-    if single_view > 0:
-        C = 1  # number of cameras
-
     m.N = pyo.RangeSet(N)
     m.P = pyo.RangeSet(P)
     m.L = pyo.RangeSet(L)
@@ -675,24 +665,18 @@ def run(root_dir: str,
     m.D2 = pyo.RangeSet(2)
     m.D3 = pyo.RangeSet(3)
     # Number of pairwise terms to include + the base measurement.
-    m.W = pyo.RangeSet(pairwise_included + 1 if pairwise_included <= 2 and pairwise_included >= 0 else 1)
-    m.NW = pyo.RangeSet(N - window_size)
+    m.W = pyo.RangeSet(3 if enable_ppms else 1)
 
     index_dict = misc.get_dlc_marker_indices()
     pair_dict = misc.get_pairwise_graph()
 
-    filtered_marker_indices = [index_dict[m] for m in filtered_markers]
-    if len(drop_out_frames) > 0:
-        logger.info(f"Drop out marker indices: {*filtered_marker_indices,}")
-        logger.info(f"Drop out frames [{len(drop_out_frames)}]: {*drop_out_frames,}")
-
     # ======= WEIGHTS =======
     def init_meas_weights(m, n, c, l, w):
         # Determine if the current measurement is the base prediction or a pairwise prediction.
-        cam_idx = single_view - 1 if single_view > 0 else c - 1
+        cam_idx = c - 1
         marker = markers[l - 1]
         values = pw_data[cam_idx][(n - 1) + start_frame]
-        likelihoods = values["pose"][2::3]
+        likelihoods = values['pose'][2::3]
         if w < 2:
             base = index_dict[marker]
             likelihoods = base_data[cam_idx][(n - 1) + start_frame][2::3]
@@ -702,24 +686,17 @@ def run(root_dir: str,
             except IndexError:
                 return 0.0
 
-        # Filter measurements based on manual dropping.
-        if (n - 1 + start_frame) in drop_out_frames and base in filtered_marker_indices:
-            return 0.0
-
         # Filter measurements based on DLC threshold.
         # This does ensures that badly predicted points are not considered in the objective function.
         return 1 / R_pw[w - 1][l - 1] if likelihoods[base] > dlc_thresh else 0.0
 
     m.meas_err_weight = pyo.Param(m.N, m.C, m.L, m.W, initialize=init_meas_weights, mutable=True)
     m.model_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / Q[p - 1] if Q[p - 1] != 0.0 else 0.0)
-    if single_view > 0:
-        m.motion_err_weight = pyo.Param(m.P, initialize=lambda m, p: 1 / pred_var[p - 1])
 
     # ===== PARAMETERS =====
     def init_measurements(m, n, c, l, d2, w):
         # Determine if the current measurement is the base prediction or a pairwise prediction.
-        cam_idx = single_view - 1 if single_view > 0 else c - 1
-        # val = values["pose"][d2 - 1::3]
+        cam_idx = c - 1
         marker = markers[l - 1]
         if w < 2:
             base = index_dict[marker]
@@ -729,19 +706,16 @@ def run(root_dir: str,
         else:
             try:
                 values = pw_data[cam_idx][(n - 1) + start_frame]
-                val = values["pose"][d2 - 1::3]
+                val = values['pose'][d2 - 1::3]
                 base = pair_dict[marker][w - 2]
-                val_pw = values["pws"][:, :, :, d2 - 1]
+                val_pw = values['pws'][:, :, :, d2 - 1]
                 return val[base] + val_pw[0, base, index_dict[marker]]
             except IndexError:
                 return 0.0
 
     m.meas = pyo.Param(m.N, m.C, m.L, m.D2, m.W, initialize=init_measurements)
 
-    # Export measurements included in the optimisation to dataframe for further inspection - used for debugging.
-    if export_measurements:
-        measurements_to_df(m)
-    logger.info("Measurement initialisation...Done")
+    print('Measurement initialisation...Done')
     # ===== VARIABLES =====
     m.x = pyo.Var(m.N, m.P)  #position
     m.dx = pyo.Var(m.N, m.P)  #velocity
@@ -749,33 +723,17 @@ def run(root_dir: str,
     m.poses = pyo.Var(m.N, m.L, m.D3)
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
-    if single_view > 0:
-        m.x_prediction = pyo.Var(m.NW, m.P)
-        m.slack_motion = pyo.Var(m.N, m.P, initialize=0.0)
-    elif enable_shutter_delay:
+    if enable_shutter_delay:
         m.shutter_delay = pyo.Var(m.C, initialize=0.0)
 
     # ===== VARIABLES INITIALIZATION =====
     init_x = np.zeros((N, P))
     init_dx = np.zeros((N, P))
     init_ddx = np.zeros((N, P))
-    if init_ekf and single_view > 0:
-        state_indices = Q > 0
-        ekf_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "fte_pw", "fte.pickle"))
-        init_x[:, state_indices] = ekf_states["x"]
-        init_dx[:, state_indices] = ekf_states["dx"]
-        init_ddx[:, state_indices] = ekf_states["ddx"]
-    elif init_ekf and single_view == 0:
-        state_indices = Q > 0
-        ekf_states = data_ops.load_pickle(os.path.join(os.path.dirname(out_dir), "ekf", "ekf.pickle"))
-        init_x[:, state_indices] = ekf_states["smoothed_x"]
-        init_dx[:, state_indices] = ekf_states["smoothed_dx"]
-        init_ddx[:, state_indices] = ekf_states["smoothed_ddx"]
-    else:
-        init_x[:, idx["x_0"]] = x_est[start_frame:start_frame + N]  #x # change this to [start_frame: end_frame]?
-        init_x[:, idx["y_0"]] = y_est[start_frame:start_frame + N]  #y
-        init_x[:, idx["z_0"]] = z_est[start_frame:start_frame + N]  #z
-        init_x[:, idx["psi_0"]] = psi_est[start_frame:start_frame + N]  # yaw = psi
+    init_x[:, idx['x_0']] = x_est[start_frame:start_frame + N]  #x # change this to [start_frame: end_frame]?
+    init_x[:, idx['y_0']] = y_est[start_frame:start_frame + N]  #y
+    init_x[:, idx['z_0']] = z_est[start_frame:start_frame + N]  #z
+    init_x[:, idx['psi_0']] = psi_est[start_frame:start_frame + N]  # yaw = psi
     for n in m.N:
         for p in m.P:
             if n < len(init_x):  #init using known values
@@ -786,9 +744,6 @@ def run(root_dir: str,
                 m.x[n, p].value = init_x[-1, p - 1]
                 m.dx[n, p].value = init_dx[-1, p - 1]
                 m.ddx[n, p].value = init_ddx[-1, p - 1]
-            # Initialise motion prediction to the initial state.
-            if single_view > 0 and n > window_size:
-                m.x_prediction[n - window_size, p].value = pyo.value(m.x[n, p])
         #init pose
         var_list = [m.x[n, p].value for p in range(1, P + 1)]
         for l in m.L:
@@ -796,7 +751,7 @@ def run(root_dir: str,
             for d3 in m.D3:
                 m.poses[n, l, d3].value = pos[d3 - 1]
 
-    logger.info("Variable initialisation...Done")
+    print('Variable initialisation...Done')
 
     # ===== CONSTRAINTS =====
     # 3D POSE
@@ -825,39 +780,19 @@ def run(root_dir: str,
 
     m.constant_acc = pyo.Constraint(m.N, m.P, rule=constant_acc)
 
-    if single_view > 0 and pipeline is not None:
-        x_input = get_vals_v(m.x, [m.N, m.P])
-        df = data_ops.series_to_supervised(x_input, window_size)
-        y_pred = pipeline.predict(df.to_numpy()[:, 0:(num_vars * window_size)])
-
-        def pose_prediction(m, n, p):
-            return m.x_prediction[n, p] == y_pred[n - 1, p - 1]
-
-        m.pose_prediction = pyo.Constraint(m.NW, m.P, rule=pose_prediction)
-
-        def motion_constraints(m, n, p):
-            if n > window_size:
-                return m.x_prediction[n - window_size, p] - m.x[n, p] - m.slack_motion[n, p] == 0.0
-            else:
-                return pyo.Constraint.Skip
-
-        m.motion_constraints = pyo.Constraint(m.N, m.P, rule=motion_constraints)
-    elif enable_shutter_delay:
+    if enable_shutter_delay:
         m.shutter_base_constraint = pyo.Constraint(rule=lambda m: m.shutter_delay[1] == 0.0)
         m.shutter_delay_constraint = pyo.Constraint(m.C, rule=lambda m, c: (-m.Ts, m.shutter_delay[c], m.Ts))
 
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
         #project
-        cam_idx = single_view - 1 if single_view > 0 else c - 1
-        if enable_shutter_delay:
-            tau = 0.0 if single_view > 0 else m.shutter_delay[c]
-        else:
-            tau = 0.0
+        cam_idx = c - 1
+        tau = m.shutter_delay[c] if enable_shutter_delay else 0.0
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
-        x = m.poses[n, l, pyo_i(idx["x_0"])] + m.dx[n, pyo_i(idx["x_0"])] * tau + m.ddx[n, pyo_i(idx["x_0"])] * (tau**2)
-        y = m.poses[n, l, pyo_i(idx["y_0"])] + m.dx[n, pyo_i(idx["y_0"])] * tau + m.ddx[n, pyo_i(idx["y_0"])] * (tau**2)
-        z = m.poses[n, l, pyo_i(idx["z_0"])] + m.dx[n, pyo_i(idx["z_0"])] * tau + m.ddx[n, pyo_i(idx["z_0"])] * (tau**2)
+        x = m.poses[n, l, _pyo_i(idx['x_0'])] + m.dx[n, _pyo_i(idx['x_0'])] * tau + m.ddx[n, _pyo_i(idx['x_0'])] * (tau**2)
+        y = m.poses[n, l, _pyo_i(idx['y_0'])] + m.dx[n, _pyo_i(idx['y_0'])] * tau + m.ddx[n, _pyo_i(idx['y_0'])] * (tau**2)
+        z = m.poses[n, l, _pyo_i(idx['z_0'])] + m.dx[n, _pyo_i(idx['z_0'])] * tau + m.ddx[n, _pyo_i(idx['z_0'])] * (tau**2)
 
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
 
@@ -865,159 +800,134 @@ def run(root_dir: str,
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     # Head
-    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["phi_0"])], np.pi / 6))
-    m.head_theta_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_0"])], np.pi / 6))
+    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['phi_0'])], np.pi / 6))
+    m.head_theta_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_0'])], np.pi / 6))
     # Neck
-    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 2, m.x[n, pyo_i(idx["phi_1"])], np.pi / 2))
-    m.neck_theta_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_1"])], np.pi / 6))
-    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["psi_1"])], np.pi / 6))
+    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 2, m.x[n, _pyo_i(idx['phi_1'])], np.pi / 2))
+    m.neck_theta_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_1'])], np.pi / 6))
+    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['psi_1'])], np.pi / 6))
     # Front torso
     m.front_torso_theta_2 = pyo.Constraint(m.N,
-                                           rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_2"])], np.pi / 6))
+                                           rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_2'])], np.pi / 6))
     # Back torso
-    m.back_torso_theta_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["theta_3"])], np.pi / 6))
-    m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["phi_3"])], np.pi / 6))
-    m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, pyo_i(idx["psi_3"])], np.pi / 6))
+    m.back_torso_theta_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_3'])], np.pi / 6))
+    m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['phi_3'])], np.pi / 6))
+    m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['psi_3'])], np.pi / 6))
     # Tail base
     m.tail_base_theta_4 = pyo.Constraint(m.N,
-                                         rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_4"])],
+                                         rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['theta_4'])],
                                                             (2 / 3) * np.pi))
     m.tail_base_psi_4 = pyo.Constraint(m.N,
-                                       rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["psi_4"])],
+                                       rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['psi_4'])],
                                                           (2 / 3) * np.pi))
     # Tail mid
     m.tail_mid_theta_5 = pyo.Constraint(m.N,
-                                        rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["theta_5"])],
+                                        rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['theta_5'])],
                                                            (2 / 3) * np.pi))
     m.tail_mid_psi_5 = pyo.Constraint(m.N,
-                                      rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, pyo_i(idx["psi_5"])],
+                                      rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['psi_5'])],
                                                          (2 / 3) * np.pi))
     # Front left leg
     m.l_shoulder_theta_6 = pyo.Constraint(m.N,
-                                          rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_6"])],
+                                          rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, _pyo_i(idx['theta_6'])],
                                                              (3 / 4) * np.pi))
-    m.l_front_knee_theta_7 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, pyo_i(idx["theta_7"])], 0))
+    m.l_front_knee_theta_7 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, _pyo_i(idx['theta_7'])], 0))
     # Front right leg
     m.r_shoulder_theta_8 = pyo.Constraint(m.N,
-                                          rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_8"])],
+                                          rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, _pyo_i(idx['theta_8'])],
                                                              (3 / 4) * np.pi))
-    m.r_front_knee_theta_9 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, pyo_i(idx["theta_9"])], 0))
+    m.r_front_knee_theta_9 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi, m.x[n, _pyo_i(idx['theta_9'])], 0))
     # Back left leg
     m.l_hip_theta_10 = pyo.Constraint(m.N,
-                                      rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_10"])],
+                                      rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, _pyo_i(idx['theta_10'])],
                                                          (3 / 4) * np.pi))
-    m.l_back_knee_theta_11 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_11"])], np.pi))
+    m.l_back_knee_theta_11 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, _pyo_i(idx['theta_11'])], np.pi))
     # Back right leg
     m.r_hip_theta_12 = pyo.Constraint(m.N,
-                                      rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_12"])],
+                                      rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, _pyo_i(idx['theta_12'])],
                                                          (3 / 4) * np.pi))
 
-    m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, pyo_i(idx["theta_13"])], np.pi))
+    m.r_back_knee_theta_13 = pyo.Constraint(m.N, rule=lambda m, n: (0, m.x[n, _pyo_i(idx['theta_13'])], np.pi))
     m.l_front_ankle_theta_14 = pyo.Constraint(m.N,
-                                              rule=lambda m, n: (-np.pi / 4, m.x[n, pyo_i(idx["theta_14"])],
+                                              rule=lambda m, n: (-np.pi / 4, m.x[n, _pyo_i(idx['theta_14'])],
                                                                  (3 / 4) * np.pi))
     m.r_front_ankle_theta_15 = pyo.Constraint(m.N,
-                                              rule=lambda m, n: (-np.pi / 4, m.x[n, pyo_i(idx["theta_15"])],
+                                              rule=lambda m, n: (-np.pi / 4, m.x[n, _pyo_i(idx['theta_15'])],
                                                                  (3 / 4) * np.pi))
     m.l_back_ankle_theta_16 = pyo.Constraint(m.N,
-                                             rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_16"])], 0))
+                                             rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, _pyo_i(idx['theta_16'])], 0))
     m.r_back_ankle_theta_17 = pyo.Constraint(m.N,
-                                             rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, pyo_i(idx["theta_17"])], 0))
+                                             rule=lambda m, n: (-(3 / 4) * np.pi, m.x[n, _pyo_i(idx['theta_17'])], 0))
 
-    logger.info("Constaint initialisation...Done")
+    print('Constaint initialisation...Done')
 
     # ======= OBJECTIVE FUNCTION =======
-    if single_view > 0:
 
-        def obj_single(m):
-            slack_model_err = 0.0
-            slack_motion_err = 0.0
-            slack_meas_err = 0.0
-            for n in m.N:
-                #Model Error
-                for p in m.P:
-                    slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
-                    slack_motion_err += m.motion_err_weight[p] * m.slack_motion[n, p]**2
-                    # slack_motion_err += (1 / 0.1 * m.slack_motion[n, p])**2
-                #Measurement Error
-                for l in m.L:
-                    for c in m.C:
-                        for d2 in m.D2:
-                            for w in m.W:
-                                slack_meas_err += loss_function(
-                                    m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
-            return 1e-3 * (slack_meas_err + slack_model_err + slack_motion_err)
+    def obj(m):
+        slack_model_err = 0.0
+        slack_meas_err = 0.0
+        for n in m.N:
+            #Model Error
+            for p in m.P:
+                slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
+            #Measurement Error
+            for l in m.L:
+                for c in m.C:
+                    for d2 in m.D2:
+                        for w in m.W:
+                            slack_meas_err += _loss_function(
+                                m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
+        return 1e-3 * (slack_meas_err + slack_model_err)
 
-        m.obj = pyo.Objective(rule=obj_single)
-    else:
+    m.obj = pyo.Objective(rule=obj)
 
-        def obj_multi(m):
-            slack_model_err = 0.0
-            slack_meas_err = 0.0
-            for n in m.N:
-                #Model Error
-                for p in m.P:
-                    slack_model_err += m.model_err_weight[p] * m.slack_model[n, p]**2
-                #Measurement Error
-                for l in m.L:
-                    for c in m.C:
-                        for d2 in m.D2:
-                            for w in m.W:
-                                slack_meas_err += loss_function(
-                                    m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
-            return 1e-3 * (slack_meas_err + slack_model_err)
-
-        m.obj = pyo.Objective(rule=obj_multi)
-
-    logger.info("Objective initialisation...Done")
+    print('Objective initialisation...Done')
     # RUN THE SOLVER
     if opt is None:
         opt = SolverFactory(
-            "ipopt",  #executable="/home/zico/lib/ipopt/build/bin/ipopt"
+            'ipopt',  #executable='/home/zico/lib/ipopt/build/bin/ipopt'
         )
         # solver options
-        opt.options["print_level"] = 5
-        opt.options["max_iter"] = 400
-        opt.options["max_cpu_time"] = 10000
-        opt.options["Tol"] = 1e-1
-        opt.options["OF_print_timing_statistics"] = "yes"
-        opt.options["OF_print_frequency_time"] = 10
-        opt.options["OF_hessian_approximation"] = "limited-memory"
-        opt.options["OF_accept_every_trial_step"] = "yes"
-        opt.options["linear_solver"] = "ma86"
-        opt.options["OF_ma86_scaling"] = "none"
+        opt.options['print_level'] = 5
+        opt.options['max_iter'] = 400
+        opt.options['max_cpu_time'] = 10000
+        opt.options['Tol'] = 1e-1
+        opt.options['OF_print_timing_statistics'] = 'yes'
+        opt.options['OF_print_frequency_time'] = 10
+        opt.options['OF_hessian_approximation'] = 'limited-memory'
+        opt.options['OF_accept_every_trial_step'] = 'yes'
+        opt.options['linear_solver'] = 'ma86'
+        opt.options['OF_ma86_scaling'] = 'none'
 
-    logger.info("Setup optimisation - End")
+    print('Setup optimisation - End')
     t1 = time()
-    logger.info(f"Initialisation took {t1 - t0:.2f}s")
+    print(f'Initialisation took {t1 - t0:.2f}s')
 
     t0 = time()
     opt.solve(m, tee=True)
     t1 = time()
-    logger.info(f"Optimisation solver took {t1 - t0:.2f}s")
+    print(f'Optimisation solver took {t1 - t0:.2f}s')
 
     app.stop_logging()
 
-    logger.info("Generate outputs...")
-    if single_view == 0 and enable_shutter_delay:
-        print("shutter delay:", [m.shutter_delay[c].value for c in m.C])
+    print('Generate outputs...')
+    if enable_shutter_delay:
+        print('shutter delay:', [m.shutter_delay[c].value for c in m.C])
 
     # ===== SAVE FTE RESULTS =====
-    x_optimised = get_vals_v(m.x, [m.N, m.P])
-    dx_optimised = get_vals_v(m.dx, [m.N, m.P])
-    ddx_optimised = get_vals_v(m.ddx, [m.N, m.P])
+    x_optimised = _get_vals_v(m.x, [m.N, m.P])
+    dx_optimised = _get_vals_v(m.dx, [m.N, m.P])
+    ddx_optimised = _get_vals_v(m.ddx, [m.N, m.P])
     positions = [pose_to_3d(*states) for states in x_optimised]
-    model_weight = get_vals_v(m.model_err_weight, [m.P])
-    model_err = get_vals_v(m.slack_model, [m.N, m.P])
-    meas_err = get_vals_v(m.slack_meas, [m.N, m.C, m.L, m.D2, m.W])
-    meas_weight = get_vals_v(m.meas_err_weight, [m.N, m.C, m.L, m.W])
-    shutter_delay = get_vals_v(m.shutter_delay, [m.C]) if enable_shutter_delay else None
-    v_vec = [np.arctan2(dx_optimised[n - 1][1], dx_optimised[n - 1][0]) for n in m.N]
+    model_weight = _get_vals_v(m.model_err_weight, [m.P])
+    model_err = _get_vals_v(m.slack_model, [m.N, m.P])
+    meas_err = _get_vals_v(m.slack_meas, [m.N, m.C, m.L, m.D2, m.W])
+    meas_weight = _get_vals_v(m.meas_err_weight, [m.N, m.C, m.L, m.W])
+    shutter_delay = _get_vals_v(m.shutter_delay, [m.C]) if enable_shutter_delay else None
 
     states = dict(x=x_optimised,
                   dx=dx_optimised,
                   ddx=ddx_optimised,
-                  velocity_vector=v_vec,
                   model_err=model_err,
                   model_weight=model_weight,
                   meas_err=meas_err,
@@ -1028,7 +938,7 @@ def run(root_dir: str,
 
     del m
 
-    out_fpath = os.path.join(out_dir, "fte.pickle")
+    out_fpath = os.path.join(out_dir, 'fte.pickle')
     utils.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
     utils.save_3d_cheetah_as_2d(positions_3ds,
                                 out_dir,
@@ -1036,215 +946,119 @@ def run(root_dir: str,
                                 markers,
                                 project_points_fisheye,
                                 start_frame,
-                                out_fname="fte",
-                                vid_dir=data_dir)
+                                out_fname='fte')
 
     # Create 2D reprojection videos.
     if generate_reprojection_videos:
         video_paths = sorted(glob(os.path.join(root_dir, data_path,
-                                               "cam[1-9].mp4")))  # original vids should be in the parent dir
+                                               'cam[1-9].mp4')))  # original vids should be in the parent dir
         app.create_labeled_videos(video_paths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
-    logger.info("Done")
+    print('Done')
+
+def _create_pose_functions(data_dir: str):
+    # symbolic vars
+    idx = misc.get_pose_params()
+    sym_list = sp.symbols(list(idx.keys()))
+    positions = misc.get_3d_marker_coords(sym_list)
+
+    func_map = {'sin': pyo.sin, 'cos': pyo.cos, 'ImmutableDenseMatrix': np.array}
+    pose_to_3d = sp.lambdify(sym_list, positions, modules=[func_map])
+    pos_funcs = []
+    for i in range(positions.shape[0]):
+        lamb = sp.lambdify(sym_list, positions[i, :], modules=[func_map])
+        pos_funcs.append(lamb)
+
+    # Save the functions to file.
+    utils.save_dill(os.path.join(data_dir, 'pose_3d_functions.pickle'), (pose_to_3d, pos_funcs))
+
+def _save_error_dists(px_errors, output_dir: str) -> Tuple[float, float, float]:
+    ratio = 0.5
+    distances = []
+    pck_threshold = []
+    for k, df in px_errors.items():
+        distances += df['pixel_residual'].tolist()
+        pck_threshold += df['pck_threshold'].tolist()
+    distances = np.asarray(list(map(float, distances)))
+    pck_threshold = np.asarray(list(map(float, pck_threshold)))
+
+    pck = 100.0 * (np.sum(distances <= (ratio * pck_threshold)) / len(distances))
+    mean_error = float(np.mean(distances))
+    med_error = float(np.median(distances))
+    utils.save_pickle(os.path.join(output_dir, 'reprojection.pickle'), {'error': distances, 'mean_error': mean_error, 'med_error': med_error, 'pck': pck})
+
+    # plot the error histogram
+    xlabel = 'Error [px]'
+    ylabel = 'Frequency'
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.hist(distances, bins=50)
+    ax.set_title(
+        f'Error Overview (N={len(distances)}, \u03BC={mean_error:.3f}, med={med_error:.3f}, PCK={pck:.3f})'
+    )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    fig.savefig(os.path.join(output_dir, 'overall_error_hist.pdf'))
+
+    hist_data = []
+    labels = []
+    for k, df in px_errors.items():
+        i = int(k)
+        e = df['pixel_residual'].tolist()
+        e = list(map(float, e))
+        hist_data.append(e)
+        labels.append('cam{} (N={})'.format(i + 1, len(e)))
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.hist(hist_data, bins=10, density=True, histtype='bar')
+    ax.legend(labels)
+    ax.set_title('Reprojection Pixel Error')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    fig.savefig(os.path.join(output_dir, 'cams_error_hist.pdf'))
+
+    return mean_error, med_error, pck
+
+def _get_vals_v(var: Union[pyo.Var, pyo.Param], idxs: list) -> np.ndarray:
+    '''
+    Verbose version that doesn't try to guess stuff for ya. Usage:
+    >>> get_vals(m.q, (m.N, m.DOF))
+    '''
+    arr = np.array([pyo.value(var[idx]) for idx in var]).astype(float)
+    return arr.reshape(*(len(i) for i in idxs))
 
 
-def run_subset_tests(out_dir_prefix: str, loss: str):
-    root_dir = os.path.join(
-        "/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos")
-    test_videos = ("2017_12_09/top/jules/run1", "2017_08_29/top/jules/run1_1", "2019_02_27/romeo/run",
-                   "2017_12_16/top/phantom/flick1", "2019_03_03/menya/flick", "2017_12_21/top/lily/flick1",
-                   "2017_12_21/bottom/jules/flick2_2", "2019_02_27/kiara/run")
-
-    t0 = time()
-    logger.info("Run reconstruction on all videos...")
-    # Initialise the Ipopt solver.
-    opt = SolverFactory("ipopt",
-                        # executable="/home/zico/lib/ipopt/build/bin/ipopt"
-                        )
-    # solver options
-    opt.options["print_level"] = 5
-    opt.options["max_iter"] = 400
-    opt.options["max_cpu_time"] = 10000
-    opt.options["Tol"] = 1e-1
-    opt.options["OF_print_timing_statistics"] = "yes"
-    opt.options["OF_print_frequency_time"] = 10
-    opt.options["OF_hessian_approximation"] = "limited-memory"
-    opt.options["OF_accept_every_trial_step"] = "yes"
-    opt.options["linear_solver"] = "ma86"
-    opt.options["OF_ma86_scaling"] = "none"
-
-    if platform.python_implementation() == "PyPy":
-        for test_dir in tqdm(test_videos):
-            run(root_dir,
-                test_dir,
-                start_frame=1,
-                end_frame=-1,
-                dlc_thresh=0.5,
-                loss=loss,
-                opt=opt,
-                out_dir_prefix=out_dir_prefix)
-    else:
-        for test in tqdm(test_videos):
-            directory = test.split("/cheetah_videos/")[1]
-            if out_dir_prefix:
-                out = os.path.join(out_dir_prefix, directory, "fte_pw")
-            else:
-                out = os.path.join(root_dir, directory, "fte_pw")
-            video_paths = sorted(glob(os.path.join(root_dir, directory,
-                                                   "cam[1-9].mp4")))  # original vids should be in the parent dir
-            app.create_labeled_videos(video_paths, out_dir=out, draw_skeleton=True, pcutoff=0.5)
-
-    t1 = time()
-    logger.info(f"Run through all videos took {t1 - t0:.2f}s")
+def _pyo_i(i: int) -> int:
+    return i + 1
 
 
-if __name__ == "__main__":
-    import gc
-    # working_dir = os.path.join("/", "data", "dlc", "to_analyse", "cheetah_videos")
-    working_dir = os.path.join(
-        "/Users/zico/OneDrive - University of Cape Town/CheetahReconstructionResults/cheetah_videos")
-    video_data = data_ops.load_pickle("../data/test_videos_list.pickle")
-    tests = video_data["test_dirs"]
-    dir_prefix = "../data/sd-results"
-    manually_selected_frames = {
-        "2019_03_03/phantom/run": (73, 272),
-        "2017_12_12/top/cetane/run1_1": (100, 241),
-        "2019_03_05/jules/run": (58, 176),
-        "2019_03_09/lily/run": (80, 180),
-        "2017_09_03/top/zorro/run1_2": (20, 120),
-        "2017_08_29/top/phantom/run1_1": (20, 170),
-        "2017_12_21/top/lily/run1": (7, 106),
-        "2019_03_03/menya/run": (20, 130),
-        "2017_12_10/top/phantom/run1": (30, 130),
-        "2017_09_03/bottom/zorro/run2_1": (126, 325),
-        "2019_02_27/ebony/run": (20, 200),
-        "2017_12_09/bottom/phantom/run2": (18, 117),
-        "2017_09_03/bottom/zorro/run2_3": (1, 200),
-        "2017_08_29/top/jules/run1_1": (10, 110),
-        "2017_09_02/top/jules/run1": (10, 110),
-        "2019_03_07/menya/run": (60, 160),
-        "2017_09_02/top/phantom/run1_2": (20, 160),
-        "2019_03_05/lily/run": (150, 250),
-        "2017_12_12/top/cetane/run1_2": (3, 202),
-        "2019_03_07/phantom/run": (100, 200),
-        "2019_02_27/romeo/run": (12, 190),
-        "2017_08_29/top/jules/run1_2": (30, 130),
-        "2017_12_16/top/cetane/run1": (110, 210),
-        "2017_09_02/top/phantom/run1_1": (33, 150),
-        "2017_09_02/top/phantom/run1_3": (35, 135),
-        "2017_09_03/top/zorro/run1_1": (4, 203),
-        "2019_02_27/kiara/run": (10, 110),
-        "2017_09_02/bottom/jules/run2": (35, 171),
-        "2017_09_03/bottom/zorro/run2_2": (32, 141),
-        "2019_03_05/lily/flick": (100, 200),
-        "2017_08_29/top/zorro/flick1_2": (20, 140),
-        "2017_09_02/bottom/phantom/flick2_1": (5, 100),
-        "2017_12_12/bottom/big_girl/flick2": (30, 100),
-        "2019_03_03/phantom/flick": (270, 460),
-        "2019_03_09/lily/flick": (10, 100),
-        "2019_03_09/jules/flick2": (80, 185),
-        "2017_09_03/top/zorro/flick1_1": (62, 150),
-        "2017_12_21/top/lily/flick1": (40, 180),
-        "2017_12_21/bottom/jules/flick2_1": (50, 200),
-        "2017_09_03/top/phantom/flick1": (100, 240),
-        "2017_09_02/top/jules/flick1_1": (60, 200),
-        "2017_08_29/top/phantom/flick1_1": (50, 200)
-    }
-    # manually_selected_frames = {
-    #     "2017_08_29/top/phantom/run1_1": (20, 170),
-    #     "2019_03_03/menya/run": (20, 150),
-    #     "2019_03_07/menya/run": (70, 160),
-    #     "2019_03_09/lily/run": (50, 200),
-    #     "2019_03_05/lily/flick": (100, 200),
-    #     "2017_08_29/top/zorro/flick1_2": (20, 140),
-    #     "2017_09_02/bottom/phantom/flick2_1": (5, 100),
-    #     "2017_12_12/bottom/big_girl/flick2": (30, 100),
-    #     "2019_03_03/phantom/flick": (270, 460),
-    # }
-    valid_vids = (
-        # "2019_03_09/lily/flick",
-        # "2019_03_09/jules/flick2",
-        "2017_09_03/top/zorro/flick1_1",
-        "2017_12_21/top/lily/flick1",
-        "2017_12_21/bottom/jules/flick2_1",
-        #   "2017_12_16/bottom/phantom/flick2_1", "2017_12_16/bottom/phantom/flick2_2"
-        # "2017_09_03/top/phantom/flick1",
-        # "2017_09_02/top/jules/flick1_1",
-        "2017_08_29/top/phantom/flick1_1")
-    bad_videos = ("2017_09_03/bottom/phantom/flick2", "2017_09_02/top/phantom/flick1_1", "2017_12_17/top/zorro/flick1")
-    if platform.python_implementation() == "PyPy":
-        time0 = time()
-        logger.info("Run reconstruction on all videos...")
-        # Initialise the Ipopt solver.
-        # optimiser = SolverFactory("ipopt", executable="/home/zico/lib/ipopt/build/bin/ipopt")
-        optimiser = SolverFactory("ipopt")
-        # solver options
-        optimiser.options["print_level"] = 5
-        optimiser.options["max_iter"] = 400
-        optimiser.options["max_cpu_time"] = 10000
-        optimiser.options["Tol"] = 1e-1
-        optimiser.options["OF_print_timing_statistics"] = "yes"
-        optimiser.options["OF_print_frequency_time"] = 10
-        optimiser.options["OF_hessian_approximation"] = "limited-memory"
-        optimiser.options["OF_accept_every_trial_step"] = "yes"
-        optimiser.options["linear_solver"] = "ma86"
-        optimiser.options["OF_ma86_scaling"] = "none"
-        # valid_vids = set(manually_selected_frames.keys())
-        for test_vid in tqdm(tests):
-            # Force garbage collection so that the repeated model creation does not overflow the memory!
-            gc.collect()
-            current_dir = test_vid.split("/cheetah_videos/")[1]
-            # Filter parameters based on past experience.
-            if current_dir not in valid_vids:
-                # Skip these videos because of erroneous input data.
-                continue
-            start = 1
-            end = -1
-            if current_dir in set(manually_selected_frames.keys()):
-                start = manually_selected_frames[current_dir][0]
-                end = manually_selected_frames[current_dir][1]
-            try:
-                run(working_dir,
-                    current_dir,
-                    start_frame=start,
-                    end_frame=end,
-                    dlc_thresh=0.5,
-                    enable_shutter_delay=True,
-                    pairwise_included=0,
-                    opt=optimiser,
-                    out_dir_prefix=dir_prefix)
-            except Exception:
-                run(working_dir,
-                    current_dir,
-                    start_frame=-1,
-                    end_frame=1,
-                    dlc_thresh=0.5,
-                    enable_shutter_delay=True,
-                    pairwise_included=0,
-                    opt=optimiser,
-                    out_dir_prefix=dir_prefix)
+def _loss_function(residual: float, loss='redescending') -> float:
+    if loss == 'redescending':
+        return misc.redescending_loss(residual, 3, 10, 20)
+    elif loss == 'lsq':
+        return residual**2
 
-        time1 = time()
-        logger.info(f"Run through all videos took {time1 - time0:.2f}s")
-    elif platform.python_implementation() == "CPython":
-        time0 = time()
-        logger.info("Run 2D reprojections on all videos...")
-        for test_vid in tqdm(tests):
-            current_dir = test_vid.split("/cheetah_videos/")[1]
-            # Filter parameters based on past experience.
-            if current_dir in bad_videos:
-                # Skip these videos because of erroneous input data.
-                continue
-            try:
-                if dir_prefix:
-                    out_directory = os.path.join(dir_prefix, current_dir, "fte_pw")
-                else:
-                    out_directory = os.path.join(working_dir, current_dir, "fte_pw")
-                video_fpaths = sorted(glob(os.path.join(working_dir, current_dir,
-                                                        "cam[1-9].mp4")))  # original vids should be in the parent dir
-                app.create_labeled_videos(video_fpaths, out_dir=out_directory, draw_skeleton=True, pcutoff=0.5)
-            except Exception:
-                continue
+    return 0.0
 
-        time1 = time()
-        logger.info(f"Video generation took {time1 - time0:.2f}s")
+# ========= MAIN ========
+if __name__ == '__main__':
+    parser = ArgumentParser(description='All Optimizations')
+    parser.add_argument('--run', action='store_true', help='Run reconstruction over all videos in AcinoSet.')
+    parser.add_argument('--eval', action='store_true', help='Evaluate reconstruction over a subset of videos in AcinoSet.')
+    args = parser.parse_args()
+
+    root_dir = os.path.join('/', 'data', 'dlc', 'to_analyse', 'cheetah_videos')
+
+    if args.eval:
+        results = acinoset_comparison(root_dir)
+        utils.save_pickle(os.path.join(root_dir, 'acinoset_comparison_results.pickle'), results)
+        results_table = pd.DataFrame.from_dict({(i,j): results[i][j] for i in results.keys() for j in results[i].keys()}, orient='index', columns=['Mean Error', 'Median Error', 'PCK'])
+        print(results_table)
+        results_table.to_csv(os.path.join(root_dir, 'acinoset_comparison_results.csv'))
+
+    if args.run:
+        video_list = utils.load_pickle('/data/zico/CheetahResults/test_videos_list.pickle')
+        dir_prefix = '/data/zico/CheetahResults/pw-sd-fte'
+        run_acinoset(root_dir, video_data=video_list, out_dir_prefix=dir_prefix)
