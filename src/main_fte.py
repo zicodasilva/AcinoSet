@@ -538,7 +538,8 @@ def run(root_dir: str,
     pose_gmm = PoseModelGMM(os.path.join(root_dir, "cheetah_runs", "v4", "model", "dataset_runs.h5"),
                             pose_params=idx,
                             ext_dim=ext_dim,
-                            n_comps=n_comps)
+                            n_comps=9 if reduced_space else n_comps,
+                            pose_model=pose_model if reduced_space else None)
 
     def norm_pdf_multivariate(x: np.ndarray, mu: np.ndarray, cov: np.ndarray):
         part1 = 1 / (((2 * np.pi)**(len(mu) / 2)) * (np.linalg.det(cov)**(1 / 2)))
@@ -653,7 +654,10 @@ def run(root_dir: str,
     # ===== CONSTRAINTS =====
     # Get the pose variables for each time instance to include in the constraints of the optimisation.
     X = np.array([[m.x[n, p] for n in m.N] for p in m.P]).T
-    positions = np.array([pose_to_3d(*states) for states in X])
+    if reduced_space:
+        positions = np.array([pose_to_3d(*states) for states in pose_model.project(X, inverse=True)])
+    else:
+        positions = np.array([pose_to_3d(*states) for states in X])
 
     # 3D POSE
     def pose_constraint(m, n, l, d3):
@@ -683,7 +687,8 @@ def run(root_dir: str,
 
         # Incorporate the prediction model as constraints.
         df = data_ops.series_to_supervised(X, n_in=window_size, n_step=window_time)
-        X_in = df.to_numpy()[:, 0:(P * window_size)]
+        n_vars = ext_dim + n_comps if reduced_space else P
+        X_in = df.to_numpy()[:, 0:(n_vars * window_size)]
         y_pred = motion_model.predict(X_in, matrix=True)
 
         def motion_constraint(m, n, p):
@@ -794,8 +799,8 @@ def run(root_dir: str,
         for n in m.N:
             # Model Error
             if use_gmm:
-                x = [m.x[n, i] for i in range(1, P + 1)]
-                if inc_obj_vel:
+                x = [m.x[n, i] for i in m.P]
+                if inc_obj_vel and not reduced_space:
                     x += [m.dx[n, i] for i in range(1, root_dim + 1)]
                 slack_pose_err += -pyomo_log(
                     sum([

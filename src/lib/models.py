@@ -252,7 +252,7 @@ class MotionModel:
 
 
 class PoseModelGMM:
-    def __init__(self, dataset_fname: str, pose_params: dict, ext_dim: int, n_comps: int, verbose: bool = False):
+    def __init__(self, dataset_fname: str, pose_params: dict, ext_dim: int, n_comps: int, pose_model: PoseModel = None):
         self.p_idx = pose_params
         self.n_comps = n_comps
         self.num_vars = len(pose_params.keys())
@@ -262,6 +262,8 @@ class PoseModelGMM:
 
         df = pd.read_hdf(dataset_fname)
         self.X = df.iloc[:, self.ext_dim:self.num_vars].to_numpy()
+        if pose_model:
+            self.X = pose_model.project(self.X, full_state=False)
         self.gmm = GaussianMixture(n_components=n_comps, random_state=42).fit(self.X)
         if self.gmm.converged_:
             logger.info(f"Converged GMM with {n_comps} components")
