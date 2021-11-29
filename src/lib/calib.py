@@ -16,7 +16,7 @@ def calibrate_camera(obj_pts: Array[np.float32, ..., 3], img_pts: Array[np.float
     assert len(img_pts) >= 4, 'Need at least 4 vaild frames to perform calibration.'
     obj_pts = np.repeat(obj_pts[np.newaxis, :, :], img_pts.shape[0], axis=0).reshape((img_pts.shape[0], -1, 1, 3))
     img_pts = img_pts.reshape((img_pts.shape[0], -1, 1, 2))
-    flags = cv.CALIB_RATIONAL_MODEL + cv.CALIB_FIX_PRINCIPAL_POINT
+    flags = cv.CALIB_RATIONAL_MODEL + cv.CALIB_FIX_PRINCIPAL_POINT + cv.CALIB_ZERO_TANGENT_DIST + cv.CALIB_FIX_K1 + cv.CALIB_FIX_K2 + cv.CALIB_FIX_K3 + cv.CALIB_FIX_K4 + cv.CALIB_FIX_K5 + cv.CALIB_FIX_K6
     ret, k, d, r, t = cv.calibrateCamera(obj_pts, img_pts, cam_res, None, None, flags=flags)
     if ret:
         return k, d, r, t
@@ -46,8 +46,13 @@ def calibrate_pair_extrinsics(obj_pts, img_pts_1, img_pts_2, k1, d1, k2, d2, cam
     flags = cv.CALIB_FIX_INTRINSIC
     term_crit = (cv.TERM_CRITERIA_MAX_ITER + cv.TERM_CRITERIA_EPS, 30, 1e-5)
     obj_pts = np.repeat(obj_pts[np.newaxis, :, :], img_pts_1.shape[0], axis=0).reshape((img_pts_1.shape[0], -1, 1, 3))
-    img_pts_1 = img_pts_1.reshape((img_pts_1.shape[0], img_pts_1.shape[1] * img_pts_1.shape[2], 1, 2))
-    img_pts_2 = img_pts_2.reshape((img_pts_2.shape[0], img_pts_2.shape[1] * img_pts_2.shape[2], 1, 2))
+    # If the points have already been reshaped into (n, m, 2) otherwise the points are still in a grid of (n, w, h, 2).
+    if len(img_pts_1.shape) == 3:
+        img_pts_1 = img_pts_1.reshape((img_pts_1.shape[0], img_pts_1.shape[1], 1, 2))
+        img_pts_2 = img_pts_2.reshape((img_pts_2.shape[0], img_pts_2.shape[1], 1, 2))
+    else:
+        img_pts_1 = img_pts_1.reshape((img_pts_1.shape[0], img_pts_1.shape[1] * img_pts_1.shape[2], 1, 2))
+        img_pts_2 = img_pts_2.reshape((img_pts_2.shape[0], img_pts_2.shape[1] * img_pts_2.shape[2], 1, 2))
     rms, *_, r, t, _, _ = cv.stereoCalibrate(obj_pts,
                                              img_pts_1,
                                              img_pts_2,
@@ -159,6 +164,15 @@ def project_points_fisheye(obj_pts, k, d, r, t):
     r_vec = cv.Rodrigues(r)[0]
     pts = cv.fisheye.projectPoints(obj_pts_reshaped, r_vec, t, k, d)[0].reshape((-1, 2))
     return pts
+
+
+def project_board_points(obj_pts, k, d, r, t):
+    obj_pts_reshaped = obj_pts.reshape((-1, 1, 3))
+    ret = []
+    for (r_vec, t_vec) in zip(r, t):
+        ret.append(cv.projectPoints(obj_pts_reshaped, r_vec, t_vec, k, d)[0].reshape((-1, 2)))
+
+    return np.asarray(ret)
 
 
 # ========== ESTIMATION ALGORITHMS ==========

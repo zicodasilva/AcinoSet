@@ -10,14 +10,14 @@ from .misc import get_3d_marker_coords, get_markers, get_skeleton, Logger
 from .vid import proc_video, VideoProcessorCV
 from .utils import create_board_object_pts, save_points, load_points, \
     save_camera, load_camera, load_manual_points, load_dlc_points_as_df, \
-    find_scene_file, save_optimised_cheetah, save_3d_cheetah_as_2d, get_pairwise_3d_points_from_df
+    find_scene_file, save_optimised_cheetah, save_3d_cheetah_as_2d, get_pairwise_3d_points_from_df, create_arabia_board_pts
 from .sba import _sba_board_points, _sba_points
 from .calib import calibrate_camera, calibrate_fisheye_camera, \
     calibrate_pair_extrinsics, calibrate_pair_extrinsics_fisheye, \
     create_undistort_point_function, create_undistort_fisheye_point_function, \
     triangulate_points, triangulate_points_fisheye, \
     project_points, project_points_fisheye, \
-    _calibrate_pairwise_extrinsics
+    _calibrate_pairwise_extrinsics, save_scene, project_board_points
 
 
 def extract_corners_from_images(img_dir,
@@ -98,6 +98,25 @@ def initialize_marker_3d(pts_2d_df, marker, k_arr, d_arr, r_arr, t_arr, dlc_thre
 # ==========  CALIBRATION  ==========
 
 
+def calibrate_arabia_intrinsics(points_fpath: str, out_fpath: str):
+    points, _, _, _, cam_res = load_points(points_fpath)
+    obj_pts = create_arabia_board_pts()
+    k, d, r, t = calibrate_camera(obj_pts, points, cam_res)
+    print('K:\n', k, '\nD:\n', d)
+    save_camera(out_fpath, cam_res, k, d)
+
+    # Reprojection error.
+    obj_projected_pts = project_board_points(obj_pts, k, d, r, t)
+    projected_pts = points.reshape((-1, 9, 2))
+    diff = obj_projected_pts - projected_pts
+    mean_img_error = np.mean(np.linalg.norm(diff, axis=2), axis=1)
+    residuals = diff.reshape(-1, 2)
+    rmse = np.linalg.norm(residuals) / np.sqrt(residuals.shape[0])
+    print(f"Intrinsic calibration reprojection error (px): {rmse:.4f}")
+
+    return k, d, r, t, points
+
+
 def calibrate_standard_intrinsics(points_fpath, out_fpath):
     points, fnames, board_shape, board_edge_len, cam_res = load_points(points_fpath)
     obj_pts = create_board_object_pts(board_shape, board_edge_len)
@@ -123,6 +142,30 @@ def calibrate_standard_extrinsics_pairwise(camera_fpaths,
                                            manual_points_fpath=None):
     _calibrate_pairwise_extrinsics(calibrate_pair_extrinsics, camera_fpaths, points_fpaths, out_fpath,
                                    dummy_scene_fpath, manual_points_fpath)
+
+
+def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path):
+    img_pts_1, _, _, _, cam_res = load_points(points_path1)
+    img_pts_2, _, _, _, cam_res = load_points(points_path2)
+    k_arr = []
+    d_arr = []
+    for c in [cam_path, cam_path]:
+        k1, d1, _ = load_camera(c)
+        k_arr.append(k1)
+        d_arr.append(d1)
+    k1, d1, _ = load_camera(cam_path)
+    k2, d2, _ = load_camera(cam_path)
+    obj_pts = create_arabia_board_pts()
+    r_arr = [[], []]
+    t_arr = r_arr.copy()
+    # Set camera 1's initial position and rotation
+    r_arr[0] = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float32)
+    t_arr[0] = np.array([[0, 0, 0]], dtype=np.float32).T
+    rms, r, t = calibrate_pair_extrinsics(obj_pts, img_pts_1, img_pts_2, k1, d1, k2, d2, cam_res)
+    print(f"Extrinsic calibration reprojection error (px): {rms:.4f}")
+    r_arr[1] = r @ r_arr[0]
+    t_arr[1] = r @ t_arr[0] + t
+    save_scene(out_fpath, k_arr, d_arr, r_arr, t_arr, cam_res)
 
 
 def calibrate_fisheye_extrinsics_pairwise(camera_fpaths,

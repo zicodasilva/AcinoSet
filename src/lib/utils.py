@@ -56,6 +56,16 @@ def load_dill(filename: str) -> Dict:
         return dill.load(handle)
 
 
+def load_json(filename: str):
+    with open(filename, "r") as f:
+        return json.load(f)
+
+
+def save_json(filename: str, data: Any):
+    with open(filename, 'w') as f:
+        json.dump(data, f)
+
+
 def load_points(fpath, verbose=False):
     with open(fpath, 'r') as f:
         data = json.load(f)
@@ -302,6 +312,21 @@ def create_board_object_pts(board_shape: Tuple[int, int], square_edge_length: np
     object_pts = np.zeros((board_shape[0] * board_shape[1], 3), np.float32)
     object_pts[:, :2] = np.mgrid[0:board_shape[0], 0:board_shape[1]].T.reshape(-1, 2) * square_edge_length
     return object_pts
+
+
+def create_arabia_board_pts() -> Array[np.float32, ..., 3]:
+    # Set dimensions in mm.
+    object_pts = np.zeros((9, 3), np.float32)
+    object_pts[1, :2] = [510, 0]
+    object_pts[2, :2] = [510, 510]
+    object_pts[3, :2] = [0, 510]
+    object_pts[4, :2] = [100, 100]
+    object_pts[5, :2] = [410, 100]
+    object_pts[6, :2] = [410, 410]
+    object_pts[7, :2] = [100, 410]
+    object_pts[8, :2] = [255, 255]
+    # Convert to meters.
+    return 1e-3 * object_pts
 
 
 def get_pairwise_3d_points_from_df(points_2d_df, k_arr, d_arr, r_arr, t_arr, triangulate_func, verbose=True):
