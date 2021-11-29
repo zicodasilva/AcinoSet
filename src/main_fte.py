@@ -15,10 +15,12 @@ from scipy.interpolate import UnivariateSpline
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 from lib import misc, utils, app, metric
-from lib.calib import triangulate_points_fisheye, project_points_fisheye
+# from lib.calib import triangulate_points_fisheye, project_points_fisheye
+from lib.calib import triangulate_points, project_points
 import matplotlib.pyplot as plt
 
 plt.style.use(os.path.join('../configs', 'mechatronics_style.yaml'))
+
 
 def validate_dataset(root_dir: str) -> List:
     markers = misc.get_markers()
@@ -27,13 +29,13 @@ def validate_dataset(root_dir: str) -> List:
     # get velocity of virtual body
     def get_velocity(position, h):
         # body COM approximated as mean of tail base, spine and neck points
-        body_x = np.mean([position[m, 'x'] for m in ['tail_base', 'spine', 'neck_base']],0)
-        body_y = np.mean([position[m, 'y'] for m in ['tail_base', 'spine', 'neck_base']],0)
-        body_z = np.mean([position[m, 'z'] for m in ['tail_base', 'spine', 'neck_base']],0)
+        body_x = np.mean([position[m, 'x'] for m in ['tail_base', 'spine', 'neck_base']], 0)
+        body_y = np.mean([position[m, 'y'] for m in ['tail_base', 'spine', 'neck_base']], 0)
+        body_z = np.mean([position[m, 'z'] for m in ['tail_base', 'spine', 'neck_base']], 0)
 
-        body_dx = (body_x[1:]-body_x[:-1])/h
-        body_dy = (body_y[1:]-body_y[:-1])/h
-        body_dz = (body_z[1:]-body_z[:-1])/h
+        body_dx = (body_x[1:] - body_x[:-1]) / h
+        body_dy = (body_y[1:] - body_y[:-1]) / h
+        body_dz = (body_z[1:] - body_z[:-1]) / h
 
         body_v = np.sqrt(body_dx**2 + body_dy**2 + body_dz**2)
         return body_v
@@ -43,14 +45,17 @@ def validate_dataset(root_dir: str) -> List:
         data = utils.load_pickle(filename)
 
         position = {}
-        for m_i,m in enumerate(markers):
-            for c_i,c in enumerate(coords):
-                    position.update({(m,c):np.array([data['positions'][f][m_i][c_i] for f in range(len(data['positions']))])})
+        for m_i, m in enumerate(markers):
+            for c_i, c in enumerate(coords):
+                position.update({
+                    (m, c):
+                    np.array([data['positions'][f][m_i][c_i] for f in range(len(data['positions']))])
+                })
         # flip direction if running towards -x
-        if position['neck_base','x'][-1] < position['neck_base','x'][0]:
+        if position['neck_base', 'x'][-1] < position['neck_base', 'x'][0]:
             for m in markers:
-                for c in ['x','y']:
-                    position[m,c] = -position[m,c]
+                for c in ['x', 'y']:
+                    position[m, c] = -position[m, c]
         return position
 
     bad_trajectories = []
@@ -62,22 +67,23 @@ def validate_dataset(root_dir: str) -> List:
         date = info[1]
         # sanity checks
         fail = 0
-        h = 1/90
-        if date[:4] == '2017': h = 1/90
-        if date[:4] == '2019': h = 1/120
+        h = 1 / 90
+        if date[:4] == '2017': h = 1 / 90
+        if date[:4] == '2019': h = 1 / 120
         body_v = get_velocity(position, h)
-        if np.max(np.abs(body_v)) > 50: # if velocity implausibly high
+        if np.max(np.abs(body_v)) > 50:  # if velocity implausibly high
             fail += 1
         for m in markers:
-            if np.min(position[m, 'z']) < -0.3: # goes too deep
+            if np.min(position[m, 'z']) < -0.3:  # goes too deep
                 fail += 1
-            if m not in ['tail_base', 'tail1', 'tail2'] and np.max(position[m, 'z']) > 1: # goes too high
+            if m not in ['tail_base', 'tail1', 'tail2'] and np.max(position[m, 'z']) > 1:  # goes too high
                 fail += 1
 
         if fail != 0:
             bad_trajectories.append(os.sep.join(info[1:-2]))
 
     return bad_trajectories
+
 
 def run_acinoset(root_dir: str, video_data: Dict, out_dir_prefix: str):
     """
@@ -189,6 +195,7 @@ def run_acinoset(root_dir: str, video_data: Dict, out_dir_prefix: str):
     time1 = time()
     print(f'Run through all videos took {time1 - time0:.2f}s')
 
+
 def acinoset_comparison(root_dir: str, use_3D_gt: bool = False) -> Dict:
     """
     Generates results for a subset of videos from AcinoSet for each method: FTE, SD-FTE, PW-FTE, PW-SD-FTE.
@@ -199,11 +206,18 @@ def acinoset_comparison(root_dir: str, use_3D_gt: bool = False) -> Dict:
         results in a dictionary.
     """
     if not use_3D_gt:
-        data_paths = [os.path.join('2019_03_09', 'jules', 'flick2'), os.path.join('2019_03_09', 'lily', 'flick'),
-        os.path.join('2017_12_16', 'bottom', 'phantom', 'flick2_1'), os.path.join('2017_09_03', 'top', 'zorro', 'flick1_1')]
+        data_paths = [
+            os.path.join('2019_03_09', 'jules', 'flick2'),
+            os.path.join('2019_03_09', 'lily', 'flick'),
+            os.path.join('2017_12_16', 'bottom', 'phantom', 'flick2_1'),
+            os.path.join('2017_09_03', 'top', 'zorro', 'flick1_1')
+        ]
         frames = [(80, 180), (10, 110), (140, 240), (60, 200)]
     else:
-        data_paths = [os.path.join('2019_03_09', 'jules', 'flick2'), os.path.join('2017_09_03', 'top', 'zorro', 'flick1_1')]
+        data_paths = [
+            os.path.join('2019_03_09', 'jules', 'flick2'),
+            os.path.join('2017_09_03', 'top', 'zorro', 'flick1_1')
+        ]
         frames = [(80, 180), (60, 200)]
     dlc_thresh = 0.5
     # Initialise the Ipopt solver.
@@ -234,13 +248,14 @@ def acinoset_comparison(root_dir: str, use_3D_gt: bool = False) -> Dict:
                 enable_ppms=True if 'pw' in test else False)
             # Produce results
             results[test][data_path] = metrics(root_dir,
-                                            data_path,
-                                            start_frame=frames[i][0],
-                                            end_frame=frames[i][1],
-                                            dlc_thresh=dlc_thresh,
-                                            use_3D_gt=use_3D_gt,
-                                            type_3D_gt=test)
+                                               data_path,
+                                               start_frame=frames[i][0],
+                                               end_frame=frames[i][1],
+                                               dlc_thresh=dlc_thresh,
+                                               use_3D_gt=use_3D_gt,
+                                               type_3D_gt=test)
     return results
+
 
 def metrics(
     root_dir: str,
@@ -351,6 +366,7 @@ def metrics(
 
     return mean_error, med_error, pck
 
+
 def plot_cheetah(root_dir: str,
                  data_dir: str,
                  fte_type: str = "sd_fte",
@@ -358,7 +374,7 @@ def plot_cheetah(root_dir: str,
                  plot_reprojections=False,
                  centered=False):
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
-    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir), "2_cam_scene.json")
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     app.plot_cheetah_reconstruction(fte_file,
@@ -367,17 +383,20 @@ def plot_cheetah(root_dir: str,
                                     dark_mode=True,
                                     centered=centered)
 
-def run(root_dir: str,
-        data_path: str,
-        start_frame: int,
-        end_frame: int,
-        dlc_thresh: float,
-        loss='redescending',
-        enable_ppms: bool = False,
-        enable_shutter_delay: bool = False,
-        opt=None,
-        generate_reprojection_videos: bool = False,
-        out_dir_prefix: str = None,) -> None:
+
+def run(
+    root_dir: str,
+    data_path: str,
+    start_frame: int,
+    end_frame: int,
+    dlc_thresh: float,
+    loss='redescending',
+    enable_ppms: bool = False,
+    enable_shutter_delay: bool = False,
+    opt=None,
+    generate_reprojection_videos: bool = False,
+    out_dir_prefix: str = None,
+) -> None:
     """
     Runs the FTE 3D reconstruction.
     Args:
@@ -416,19 +435,21 @@ def run(root_dir: str,
 
     # ========= IMPORT CAMERA & SCENE PARAMS ========
     try:
-        k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir)
+        k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir, "2_cam_scene.json")
+        # k_arr, d_arr, r_arr, t_arr, cam_res = utils.load_scene(os.path.join(data_dir, "extrinsic_calib", "2_cam_scene.json"), True)
+        # n_cams = 2
     except Exception:
         print('Early exit because extrinsic calibration files could not be located')
         return
     d_arr = d_arr.reshape((-1, 4))
 
-     # load video info
+    # load video info
     res, fps, num_frames = 0, 0, 0
     if platform.python_implementation() == "CPython":
         res, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
         assert res == cam_res
     elif platform.python_implementation() == "PyPy":
-        fps = 120 if "2019" in data_dir else 90
+        fps = 1000
 
     # load DLC data
     dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
@@ -486,18 +507,18 @@ def run(root_dir: str,
         N = end_frame - start_frame
 
     # For memory reasons - do not perform optimisation on trajectories larger than 200 points.
-    if N > 200:
-        end_frame = start_frame + 200
-        N = end_frame - start_frame
+    # if N > 200:
+    #     end_frame = start_frame + 200
+    #     N = end_frame - start_frame
 
     ## ========= POSE FUNCTIONS ========
     try:
-        pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions.pickle'))
+        pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions_with_paws.pickle'))
     except FileNotFoundError:
         print('Lambdify pose functions and save to file for re-use in the future...')
         _create_pose_functions(root_dir)
 
-    pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions.pickle'))
+    pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions_with_paws.pickle'))
     idx = misc.get_pose_params()
     sym_list = list(idx.keys())
 
@@ -572,7 +593,8 @@ def run(root_dir: str,
     ],
                     dtype=float)
     # Provides some extra uncertainty to the measurements to accomodate for the rigid body body assumption.
-    R_pw *= 1.5
+    # R_pw *= 2
+    R_pw[:] = 5
 
     Q = [  # model parameters variance
         4,
@@ -614,7 +636,7 @@ def run(root_dir: str,
     df_paths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
 
     points_3d_df = utils.get_pairwise_3d_points_from_df(filtered_points_2d_df, k_arr, d_arr, r_arr, t_arr,
-                                                        triangulate_points_fisheye)
+                                                        triangulate_points)
 
     # estimate initial points
     print('Estimate the initial trajectory')
@@ -650,8 +672,8 @@ def run(root_dir: str,
     for path in df_paths:
         # Pairwise correspondence data.
         h5_filename = os.path.basename(path)
-        pw_data[cam_idx] = utils.load_pickle(
-            os.path.join(dlc_dir + '_pw', f'{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle'))
+        # pw_data[cam_idx] = utils.load_pickle(
+        #     os.path.join(dlc_dir + '_pw', f'{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle'))
         df_temp = pd.read_hdf(os.path.join(dlc_dir, h5_filename))
         base_data[cam_idx] = list(df_temp.to_numpy())
         cam_idx += 1
@@ -659,16 +681,16 @@ def run(root_dir: str,
     # There has been a case where some camera view points have less frames than others.
     # This can cause an issue when using automatic frame selection.
     # Therefore, ensure that the end frame is within range.
-    min_num_frames = min([len(val) for val in pw_data.values()])
-    if end_frame > min_num_frames:
-        end_frame = min_num_frames
-        N = end_frame - start_frame
+    # min_num_frames = min([len(val) for val in pw_data.values()])
+    # if end_frame > min_num_frames:
+    #     end_frame = min_num_frames
+    #     N = end_frame - start_frame
 
     print('Prepare data - End')
 
     # save parameters
     with open(os.path.join(out_dir, 'reconstruction_params.json'), 'w') as f:
-        json.dump(dict(start_frame=start_frame+1, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
+        json.dump(dict(start_frame=start_frame + 1, end_frame=end_frame, dlc_thresh=dlc_thresh), f)
 
     print(f'Start frame: {start_frame}, End frame: {end_frame}, Frame rate: {fps}')
 
@@ -700,8 +722,8 @@ def run(root_dir: str,
         # Determine if the current measurement is the base prediction or a pairwise prediction.
         cam_idx = c - 1
         marker = markers[l - 1]
-        values = pw_data[cam_idx][(n - 1) + start_frame]
-        likelihoods = values['pose'][2::3]
+        # values = pw_data[cam_idx][(n - 1) + start_frame]
+        # likelihoods = values['pose'][2::3]
         if w < 2:
             base = index_dict[marker]
             likelihoods = base_data[cam_idx][(n - 1) + start_frame][2::3]
@@ -809,7 +831,7 @@ def run(root_dir: str,
 
     if enable_shutter_delay:
         m.shutter_base_constraint = pyo.Constraint(rule=lambda m: m.shutter_delay[1] == 0.0)
-        m.shutter_delay_constraint = pyo.Constraint(m.C, rule=lambda m, c: (-m.Ts*5, m.shutter_delay[c], m.Ts*5))
+        m.shutter_delay_constraint = pyo.Constraint(m.C, rule=lambda m, c: (-m.Ts * 5, m.shutter_delay[c], m.Ts * 5))
 
     # MEASUREMENT
     def measurement_constraints(m, n, c, l, d2, w):
@@ -817,9 +839,12 @@ def run(root_dir: str,
         cam_idx = c - 1
         tau = m.shutter_delay[c] if enable_shutter_delay else 0.0
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
-        x = m.poses[n, l, _pyo_i(idx['x_0'])] + m.dx[n, _pyo_i(idx['x_0'])] * tau + m.ddx[n, _pyo_i(idx['x_0'])] * (tau**2)
-        y = m.poses[n, l, _pyo_i(idx['y_0'])] + m.dx[n, _pyo_i(idx['y_0'])] * tau + m.ddx[n, _pyo_i(idx['y_0'])] * (tau**2)
-        z = m.poses[n, l, _pyo_i(idx['z_0'])] + m.dx[n, _pyo_i(idx['z_0'])] * tau + m.ddx[n, _pyo_i(idx['z_0'])] * (tau**2)
+        x = m.poses[n, l,
+                    _pyo_i(idx['x_0'])] + m.dx[n, _pyo_i(idx['x_0'])] * tau + m.ddx[n, _pyo_i(idx['x_0'])] * (tau**2)
+        y = m.poses[n, l,
+                    _pyo_i(idx['y_0'])] + m.dx[n, _pyo_i(idx['y_0'])] * tau + m.ddx[n, _pyo_i(idx['y_0'])] * (tau**2)
+        z = m.poses[n, l,
+                    _pyo_i(idx['z_0'])] + m.dx[n, _pyo_i(idx['z_0'])] * tau + m.ddx[n, _pyo_i(idx['z_0'])] * (tau**2)
 
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2, w] == 0.0
 
@@ -837,7 +862,8 @@ def run(root_dir: str,
     m.front_torso_theta_2 = pyo.Constraint(m.N,
                                            rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_2'])], np.pi / 6))
     # Back torso
-    m.back_torso_theta_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_3'])], np.pi / 6))
+    m.back_torso_theta_3 = pyo.Constraint(m.N,
+                                          rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_3'])], np.pi / 6))
     m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['phi_3'])], np.pi / 6))
     m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['psi_3'])], np.pi / 6))
     # Tail base
@@ -911,9 +937,8 @@ def run(root_dir: str,
     print('Objective initialisation...Done')
     # RUN THE SOLVER
     if opt is None:
-        opt = SolverFactory(
-            'ipopt',  executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else None
-        )
+        opt = SolverFactory('ipopt',
+                            executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else None)
         # solver options
         opt.options['print_level'] = 5
         opt.options['max_iter'] = 400
@@ -960,7 +985,6 @@ def run(root_dir: str,
                   meas_err=meas_err,
                   meas_weight=meas_weight,
                   shutter_delay=shutter_delay)
-
     positions_3ds = misc.get_all_marker_coords_from_states(states, n_cams)
 
     del m
@@ -971,7 +995,7 @@ def run(root_dir: str,
                                 out_dir,
                                 scene_fpath,
                                 markers,
-                                project_points_fisheye,
+                                project_points,
                                 start_frame,
                                 out_fname='fte')
 
@@ -982,6 +1006,7 @@ def run(root_dir: str,
         app.create_labeled_videos(video_paths, out_dir=out_dir, draw_skeleton=True, pcutoff=dlc_thresh)
 
     print('Done')
+
 
 def _create_pose_functions(data_dir: str):
     # symbolic vars
@@ -999,6 +1024,7 @@ def _create_pose_functions(data_dir: str):
     # Save the functions to file.
     utils.save_dill(os.path.join(data_dir, 'pose_3d_functions.pickle'), (pose_to_3d, pos_funcs))
 
+
 def _save_error_dists(px_errors, output_dir: str) -> Tuple[float, float, float]:
     ratio = 0.5
     distances = []
@@ -1012,7 +1038,12 @@ def _save_error_dists(px_errors, output_dir: str) -> Tuple[float, float, float]:
     pck = 100.0 * (np.sum(distances <= (ratio * pck_threshold)) / len(distances))
     mean_error = float(np.mean(distances))
     med_error = float(np.median(distances))
-    utils.save_pickle(os.path.join(output_dir, 'reprojection.pickle'), {'error': distances, 'mean_error': mean_error, 'med_error': med_error, 'pck': pck})
+    utils.save_pickle(os.path.join(output_dir, 'reprojection.pickle'), {
+        'error': distances,
+        'mean_error': mean_error,
+        'med_error': med_error,
+        'pck': pck
+    })
 
     # plot the error histogram
     xlabel = 'Error [px]'
@@ -1021,9 +1052,7 @@ def _save_error_dists(px_errors, output_dir: str) -> Tuple[float, float, float]:
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1)
     ax.hist(distances, bins=50)
-    ax.set_title(
-        f'Error Overview (N={len(distances)}, \u03BC={mean_error:.3f}, med={med_error:.3f}, PCK={pck:.3f})'
-    )
+    ax.set_title(f'Error Overview (N={len(distances)}, \u03BC={mean_error:.3f}, med={med_error:.3f}, PCK={pck:.3f})')
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     fig.savefig(os.path.join(output_dir, 'overall_error_hist.pdf'))
@@ -1048,6 +1077,7 @@ def _save_error_dists(px_errors, output_dir: str) -> Tuple[float, float, float]:
 
     return mean_error, med_error, pck
 
+
 def _get_vals_v(var: Union[pyo.Var, pyo.Param], idxs: list) -> np.ndarray:
     '''
     Verbose version that doesn't try to guess stuff for ya. Usage:
@@ -1069,11 +1099,14 @@ def _loss_function(residual: float, loss='redescending') -> float:
 
     return 0.0
 
+
 # ========= MAIN ========
 if __name__ == '__main__':
     parser = ArgumentParser(description='All Optimizations')
     parser.add_argument('--run', action='store_true', help='Run reconstruction over all videos in AcinoSet.')
-    parser.add_argument('--eval', action='store_true', help='Evaluate reconstruction over a subset of videos in AcinoSet.')
+    parser.add_argument('--eval',
+                        action='store_true',
+                        help='Evaluate reconstruction over a subset of videos in AcinoSet.')
     args = parser.parse_args()
 
     root_dir = os.path.join('/', 'data', 'dlc', 'to_analyse', 'cheetah_videos')
@@ -1081,7 +1114,11 @@ if __name__ == '__main__':
     if args.eval:
         results = acinoset_comparison(root_dir)
         utils.save_pickle(os.path.join(root_dir, 'acinoset_comparison_results.pickle'), results)
-        results_table = pd.DataFrame.from_dict({(i,j): results[i][j] for i in results.keys() for j in results[i].keys()}, orient='index', columns=['Mean Error', 'Median Error', 'PCK'])
+        results_table = pd.DataFrame.from_dict(
+            {(i, j): results[i][j]
+             for i in results.keys() for j in results[i].keys()},
+            orient='index',
+            columns=['Mean Error', 'Median Error', 'PCK'])
         print(results_table)
         results_table.to_csv(os.path.join(root_dir, 'acinoset_comparison_results.csv'))
 

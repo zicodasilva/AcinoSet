@@ -24,7 +24,6 @@ class VideoProcessor(object):
     Base class for a video processing unit, implementation is required for video loading and saving.
     out_h and out_w are the output height and width respectively.
     """
-
     def __init__(self, in_name='', out_name='', nframes=-1, fps=30, codec='X264', out_h='', out_w=''):
         self.in_name = in_name
         self.out_name = out_name
@@ -122,7 +121,6 @@ class VideoProcessorCV(VideoProcessor):
     OpenCV implementation of VideoProcessor
     requires opencv-python==3.4.0.12
     """
-
     def __init__(self, *args, **kwargs):
         super(VideoProcessorCV, self).__init__(*args, **kwargs)
 
@@ -143,7 +141,7 @@ class VideoProcessorCV(VideoProcessor):
         return cv.VideoWriter(self.out_name, fourcc, self.FPS, (self.out_w, self.out_h), True)
 
     def _read_frame(self):
-#         return np.flip(self.in_vid.read()[1], 2) # return RGB rather than BGR!
+        #         return np.flip(self.in_vid.read()[1], 2) # return RGB rather than BGR!
         return self.in_vid.read()[1]
 
     def save_frame(self, frame):
@@ -159,14 +157,10 @@ def get_segment_indices(bodyparts2connect, all_bpts):
     bpts2connect = []
     for bpt1, bpt2 in bodyparts2connect:
         if bpt1 in all_bpts and bpt2 in all_bpts:
-            bpts2connect.extend(
-                zip(
-                    *(
-                        np.flatnonzero(all_bpts == bpt1),
-                        np.flatnonzero(all_bpts == bpt2),
-                    )
-                )
-            )
+            bpts2connect.extend(zip(*(
+                np.flatnonzero(all_bpts == bpt1),
+                np.flatnonzero(all_bpts == bpt2),
+            )))
     return bpts2connect
 
 
@@ -182,9 +176,11 @@ def CreateVideo(clip, df, pcutoff, bodyparts2plot, bodyparts2connect, dotsize, c
         # recode the bodyparts2connect into indices for df_x and df_y for speed
         bpts2connect = get_segment_indices(bodyparts2connect, all_bpts)
 
-    print(f'\nDuration of video: {round(clip.frame_count() / clip.fps(), 2)} s, recorded with {round(clip.fps(), 2)} fps!',
-          f'Total frames: {clip.frame_count()} with frame dimensions: {clip.width()} x {clip.height()}',
-          'Generating frames and creating video...', sep='\n')
+    print(
+        f'\nDuration of video: {round(clip.frame_count() / clip.fps(), 2)} s, recorded with {round(clip.fps(), 2)} fps!',
+        f'Total frames: {clip.frame_count()} with frame dimensions: {clip.width()} x {clip.height()}',
+        'Generating frames and creating video...',
+        sep='\n')
 
     df_x, df_y, df_likelihood = df.values.reshape((df.index.size, -1, 3)).T
     df_xy = np.array([df_x, df_y])
@@ -206,23 +202,24 @@ def CreateVideo(clip, df, pcutoff, bodyparts2plot, bodyparts2connect, dotsize, c
                 if draw_skeleton:
                     for bpt1, bpt2 in bpts2connect:
                         if not np.isnan(df_xy[:, [bpt1, bpt2], idx]).any():
-                            if ((df_likelihood[[bpt1, bpt2], idx] > pcutoff).all() or np.isnan(df_likelihood[[bpt1, bpt2], idx]).all()):
-                                cv.line(image,
-                                        tuple(df_xy[:, bpt1, idx].astype(np.uint16)),
-                                        tuple(df_xy[:, bpt2, idx].astype(np.uint16)),
-                                        color_for_skeleton, 2, cv.LINE_AA)
+                            if ((df_likelihood[[bpt1, bpt2], idx] > pcutoff).all()
+                                    or np.isnan(df_likelihood[[bpt1, bpt2], idx]).all()):
+                                cv.line(image, tuple(df_xy[:, bpt1, idx].astype(np.uint16)),
+                                        tuple(df_xy[:, bpt2, idx].astype(np.uint16)), color_for_skeleton, 2, cv.LINE_AA)
 
                 for ind, num_bp in bpts2color:
                     if not np.isnan(df_xy[:, ind, idx]).any():
                         if (df_likelihood[ind, idx] > pcutoff) or np.isnan(df_likelihood[ind, idx]):
-                            cv.circle(image, tuple(df_xy[:, ind, idx].astype(np.uint16)), dotsize, colors[num_bp], cv.FILLED)
+                            cv.circle(image, tuple(df_xy[:, ind, idx].astype(np.uint16)), dotsize, colors[num_bp],
+                                      cv.FILLED)
             except KeyError:
-                pass # do nothing to image if frame_idx is not in df
+                pass  # do nothing to image if frame_idx is not in df
             clip.save_frame(image)
     clip.close()
 
 
-def proc_video(out_dir, bodyparts, codec, bodyparts2connect, outputframerate, draw_skeleton, pcutoff, dotsize, colormap, skeleton_color, video):
+def proc_video(out_dir, bodyparts, codec, bodyparts2connect, outputframerate, draw_skeleton, pcutoff, dotsize, colormap,
+               skeleton_color, video):
     """Helper function for create_labeled_videos"""
     video = os.path.abspath(video)
     vname = os.path.splitext(os.path.basename(video))[0]
@@ -239,7 +236,8 @@ def proc_video(out_dir, bodyparts, codec, bodyparts2connect, outputframerate, dr
         labeled_bpts = [bp for bp in df.columns.get_level_values('bodyparts').unique() if bp in bodyparts]
         clip = VideoProcessorCV(in_name=video, out_name=videooutname, codec=codec)
 
-        CreateVideo(clip, df, pcutoff, labeled_bpts, bodyparts2connect, dotsize, colormap, draw_skeleton, skeleton_color)
+        CreateVideo(clip, df, pcutoff, labeled_bpts, bodyparts2connect, dotsize, colormap, draw_skeleton,
+                    skeleton_color)
 
         os.chdir(start_path)
 
