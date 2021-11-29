@@ -109,7 +109,6 @@ def calibrate_arabia_intrinsics(points_fpath: str, out_fpath: str):
     obj_projected_pts = project_board_points(obj_pts, k, d, r, t)
     projected_pts = points.reshape((-1, 9, 2))
     diff = obj_projected_pts - projected_pts
-    mean_img_error = np.mean(np.linalg.norm(diff, axis=2), axis=1)
     residuals = diff.reshape(-1, 2)
     rmse = np.linalg.norm(residuals) / np.sqrt(residuals.shape[0])
     print(f"Intrinsic calibration reprojection error (px): {rmse:.4f}")
