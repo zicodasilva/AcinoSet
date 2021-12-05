@@ -5,7 +5,7 @@ import pickle
 import cv2 as cv
 import numpy as np
 from glob import glob
-from .points import find_corners_images, EOM_curve_fit
+from .points import find_corners_images, EOM_curve_fit, common_image_points
 from .misc import get_3d_marker_coords, get_markers, get_skeleton, Logger
 from .vid import proc_video, VideoProcessorCV
 from .utils import create_board_object_pts, save_points, load_points, \
@@ -143,17 +143,17 @@ def calibrate_standard_extrinsics_pairwise(camera_fpaths,
                                    dummy_scene_fpath, manual_points_fpath)
 
 
-def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path):
-    img_pts_1, _, _, _, cam_res = load_points(points_path1)
-    img_pts_2, _, _, _, cam_res = load_points(points_path2)
+def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path1, cam_path2):
+    img_pts_1, fnames, _, _, cam_res = load_points(points_path1)
+    img_pts_2, fnames, _, _, cam_res = load_points(points_path2)
     k_arr = []
     d_arr = []
-    for c in [cam_path, cam_path]:
+    for c in [cam_path1, cam_path2]:
         k1, d1, _ = load_camera(c)
         k_arr.append(k1)
         d_arr.append(d1)
-    k1, d1, _ = load_camera(cam_path)
-    k2, d2, _ = load_camera(cam_path)
+    k1, d1, _ = load_camera(cam_path1)
+    k2, d2, _ = load_camera(cam_path2)
     obj_pts = create_arabia_board_pts()
     r_arr = [[], []]
     t_arr = r_arr.copy()

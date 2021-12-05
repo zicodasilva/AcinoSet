@@ -89,7 +89,7 @@ def prepare_calib_board_data_for_bundle_adjustment(img_pts_arr, fnames_arr, boar
     points_3d = np.array(points_3d, dtype=np.float32)
     point_3d_indices = np.array(point_3d_indices, dtype=np.int)
     camera_indices = np.array(camera_indices, dtype=np.int)
-    
+
     return points_2d, points_3d, point_3d_indices, camera_indices
 
 
@@ -133,7 +133,7 @@ def prepare_manual_points_for_bundle_adjustment(img_pts_arr, k_arr, d_arr, r_arr
     points_3d = np.array(points_3d, dtype=np.float32)
     point_3d_indices = np.array(point_3d_indices, dtype=np.int)
     camera_indices = np.array(camera_indices, dtype=np.int)
-    
+
     return points_2d, points_3d, point_3d_indices, camera_indices
 
 
@@ -167,8 +167,8 @@ def bundle_adjust_points_and_extrinsics(points_2d, points_3d, point_3d_indices, 
     A = create_bundle_adjustment_jacobian_sparsity_matrix(n_cams, n_params_per_camera, camera_indices, n_points,
                                                           point_3d_indices)
     t0 = time()
-    res = least_squares(cost_func_points_extrinsics, x0, jac_sparsity=A, verbose=2, x_scale='jac', ftol=1e-10,
-                        method='trf', loss='cauchy',
+    res = least_squares(cost_func_points_extrinsics, x0, jac_sparsity=A, verbose=2, x_scale='jac',
+                        method='trf', loss='linear',
                         args=(n_cams, n_points, point_3d_indices, camera_indices, k_arr, d_arr, points_2d, project_func),
                         max_nfev=1000)
     t1 = time()
@@ -227,7 +227,7 @@ def _sba_board_points(scene_fpath, points_fpaths, manual_points_fpath, out_fpath
         # load manual points
         manual_points, manual_fnames, *_ = load_manual_points(manual_points_fpath)
         # optimize
-        
+
         # (n_points, [x,y]), (n_3d_points, [x,y,z]), (3d_point_indices), (camera_indices)
         manual_points_2d, manual_points_3d, manual_point_3d_indices, manual_camera_indices = prepare_manual_points_for_bundle_adjustment(
             manual_points,
@@ -236,7 +236,7 @@ def _sba_board_points(scene_fpath, points_fpaths, manual_points_fpath, out_fpath
         )
         if manual_points_only:
             print('bundle_adjust_board_points_and_extrinsics (with manual points only)')
-            
+
             obj_pts, r_arr, t_arr, res = bundle_adjust_points_and_extrinsics(
                 manual_points_2d, manual_points_3d, manual_point_3d_indices, manual_camera_indices,
                 k_arr, d_arr, r_arr, t_arr,
@@ -256,7 +256,7 @@ def _sba_board_points(scene_fpath, points_fpaths, manual_points_fpath, out_fpath
             points_3d = np.append(points_3d, manual_points_3d, axis=0)
             point_3d_indices = np.append(point_3d_indices, manual_point_3d_indices + point_3d_indices.max(), axis=0)
             camera_indices = np.append(camera_indices, manual_camera_indices, axis=0)
-            
+
             obj_pts, r_arr, t_arr, res = bundle_adjust_points_and_extrinsics(
                 points_2d, points_3d, point_3d_indices, camera_indices,
                 k_arr, d_arr, r_arr, t_arr,
@@ -277,16 +277,16 @@ def _sba_board_points(scene_fpath, points_fpaths, manual_points_fpath, out_fpath
         )
     print(f"\nBefore: mean: {np.mean(res['before'])}, std: {np.std(res['before'])}")
     print(f"After: mean: {np.mean(res['after'])}, std: {np.std(res['after'])}\n")
-        
+
     save_scene(out_fpath, k_arr, d_arr, r_arr, t_arr, cam_res)
-    return res
+    return res, points_3d, obj_pts
 
 
 def _sba_points(scene_fpath, points_2d_df, triangulate_func, project_func):
     # load scene
     k_arr, d_arr, r_arr, t_arr, cam_res = load_scene(scene_fpath)
     assert len(k_arr) == points_2d_df['camera'].nunique()
-    
+
     points_3d_df = get_pairwise_3d_points_from_df(
         points_2d_df,
         k_arr, d_arr.reshape((-1,4)), r_arr, t_arr,
@@ -295,12 +295,12 @@ def _sba_points(scene_fpath, points_2d_df, triangulate_func, project_func):
 
     points_3d_df['point_index'] = points_3d_df.index
     points_3d = np.array(points_3d_df[['x', 'y', 'z']])
-    
+
     points_df = points_2d_df.merge(points_3d_df, how='inner', on=['frame','marker'], suffixes=('_cam',''))
     points_2d = np.array(points_df[['x_cam', 'y_cam']])
     point_indices = np.array(points_df['point_index'])
     camera_indices = np.array(points_df['camera'])
-    
+
     print('bundle_adjust_points_only')
     pts_3d, res = bundle_adjust_points_only(
         points_2d, points_3d, point_indices, camera_indices, k_arr, d_arr, r_arr, t_arr, project_func, f_scale=50
