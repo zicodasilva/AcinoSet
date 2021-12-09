@@ -1,5 +1,4 @@
 import os
-import platform
 import sys
 import pickle
 import cv2 as cv
@@ -11,7 +10,7 @@ from .vid import proc_video, VideoProcessorCV
 from .utils import create_board_object_pts, save_points, load_points, \
     save_camera, load_camera, load_manual_points, load_dlc_points_as_df, \
     find_scene_file, save_optimised_cheetah, save_3d_cheetah_as_2d, get_pairwise_3d_points_from_df, create_arabia_board_pts
-from .sba import _sba_board_points, _sba_points
+from .sba import _sba_board_points, _sba_points, _sba_extrinsic_params
 from .calib import calibrate_camera, calibrate_fisheye_camera, \
     calibrate_pair_extrinsics, calibrate_pair_extrinsics_fisheye, \
     create_undistort_point_function, create_undistort_fisheye_point_function, \
@@ -142,7 +141,6 @@ def calibrate_standard_extrinsics_pairwise(camera_fpaths,
     _calibrate_pairwise_extrinsics(calibrate_pair_extrinsics, camera_fpaths, points_fpaths, out_fpath,
                                    dummy_scene_fpath, manual_points_fpath)
 
-
 def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path1, cam_path2):
     img_pts_1, fnames, _, _, cam_res = load_points(points_path1)
     img_pts_2, fnames, _, _, cam_res = load_points(points_path2)
@@ -178,6 +176,11 @@ def calibrate_fisheye_extrinsics_pairwise(camera_fpaths,
 
 # ==========  SBA  ==========
 
+
+def sba_extrinsic_params_standard(scene_fpath,
+                              points_fpaths,
+                              out_fpath):
+    return _sba_extrinsic_params(scene_fpath, points_fpaths, out_fpath, triangulate_points, project_points)
 
 def sba_board_points_standard(scene_fpath,
                               points_fpaths,

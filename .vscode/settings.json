@@ -17,5 +17,8 @@
     ],
     "jupyter.jupyterServerType": "local",
     "python.analysis.typeCheckingMode": "basic",
-    "python.analysis.stubPath": "/Users/zico/msc/dev/typesieve/"
+    "python.analysis.stubPath": "/Users/zico/msc/dev/typesieve/",
+    "[json]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    }
 }

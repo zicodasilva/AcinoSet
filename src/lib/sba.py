@@ -22,6 +22,27 @@ def create_bundle_adjustment_jacobian_sparsity_matrix(n_cams, n_params_per_camer
     return A
 
 
+def create_jacobian_sparsity_matrix(n_cams, n_params_per_camera, camera_indices):
+    m = camera_indices.size * 2
+    n = n_cams * n_params_per_camera
+    A = lil_matrix((m, n), dtype=int)
+    i = np.arange(camera_indices.size)
+    for s in range(n_params_per_camera):
+        A[2 * i, camera_indices * n_params_per_camera + s] = 1
+        A[2 * i + 1, camera_indices * n_params_per_camera + s] = 1
+    return A
+
+
+def params_to_extrinsics(params, n_cams):
+    r_end_idx = n_cams * 3
+    t_end_idx = r_end_idx + n_cams * 3
+    r_vecs = params[:r_end_idx].reshape((n_cams, 3))
+    r_arr = np.array([Rodrigues(r)[0] for r in r_vecs], dtype=np.float64)
+    t_arr = params[r_end_idx:t_end_idx].reshape((n_cams, 3, 1))
+    return r_arr, t_arr
+
+
+
 def params_to_points_extrinsics(params, n_cams, n_points):
     r_end_idx = n_cams*3
     t_end_idx = r_end_idx + n_cams*3
@@ -34,7 +55,7 @@ def params_to_points_extrinsics(params, n_cams, n_points):
 
 # ========== SBA PREPARATION ==========
 
-def prepare_calib_board_data_for_bundle_adjustment(img_pts_arr, fnames_arr, board_shape, k_arr, d_arr, r_arr, t_arr, triangulate_func):
+def prepare_calib_board_data_for_bundle_adjustment(img_pts_arr, fnames_arr, board_shape, k_arr, d_arr, r_arr, t_arr, triangulate_func, num_view_points = 2):
     # Find all images names
     n_cam = len(img_pts_arr)
     fname_set = set()
@@ -50,7 +71,7 @@ def prepare_calib_board_data_for_bundle_adjustment(img_pts_arr, fnames_arr, boar
                 fname_dict[k] = v+1
     items = dict(fname_dict)
     for k,v in items.items():
-        if v < 2:
+        if v < num_view_points:
             fname_dict.pop(k)
     # Initialize array
     points_3d = []
@@ -139,6 +160,20 @@ def prepare_manual_points_for_bundle_adjustment(img_pts_arr, k_arr, d_arr, r_arr
 
 # ========== COST FUNCTIONS ==========
 
+
+def cost_func_extrinsics(params, n_cams, obj_pts, point_3d_indices, camera_indices, k_arr, d_arr, points_2d,
+                                project_func):
+    r_arr, t_arr = params_to_extrinsics(params, n_cams)
+    reprojected_pts = np.array([
+        project_func(obj_pts[i], k_arr[j], d_arr[j], r_arr[j], t_arr[j])[0]
+        for i, j in zip(point_3d_indices, camera_indices)
+    ])
+    error = (reprojected_pts - points_2d).ravel()
+    error[np.isnan(error)] = 0.0
+
+    return error
+
+
 def cost_func_points_extrinsics(params, n_cams, n_points, point_3d_indices, camera_indices, k_arr, d_arr, points_2d, project_func):
     obj_pts, r_arr, t_arr = params_to_points_extrinsics(params, n_cams, n_points)
     reprojected_pts = np.array([project_func(obj_pts[i], k_arr[j], d_arr[j], r_arr[j], t_arr[j])[0] for i,j in zip(point_3d_indices, camera_indices)])
@@ -154,6 +189,33 @@ def cost_func_points_only(params, n_points, point_3d_indices, camera_indices, k_
 
 
 # ========== SBA ==========
+
+
+def bundle_adjust_extrinsics(points_2d, points_3d, point_3d_indices, camera_indices, k_arr, d_arr, r_arr,
+                                        t_arr, project_func):
+    n_cams = len(k_arr)
+    n_params_per_camera = 6
+    r_vecs = np.array([Rodrigues(r)[0] for r in r_arr], dtype=np.float64).flatten()
+    t_vecs = t_arr.flatten()
+    x0 = np.concatenate([r_vecs, t_vecs])
+    f0 = cost_func_extrinsics(x0, n_cams, points_3d, point_3d_indices, camera_indices, k_arr, d_arr, points_2d,
+                              project_func)
+    t0 = time()
+    res = least_squares(cost_func_extrinsics,
+                        x0,
+                        verbose=2,
+                        x_scale='jac',
+                        method='trf',
+                        loss='linear',
+                        args=(n_cams, points_3d, point_3d_indices, camera_indices, k_arr, d_arr, points_2d,
+                              project_func),
+                        max_nfev=1000)
+    t1 = time()
+    print(f'\nOptimization took {t1-t0:.2f} seconds')
+    r_arr, t_arr = params_to_extrinsics(res.x, n_cams)
+    residuals = dict(before=f0, after=res.fun)
+    return points_3d, r_arr, t_arr, residuals
+
 
 def bundle_adjust_points_and_extrinsics(points_2d, points_3d, point_3d_indices, camera_indices, k_arr, d_arr, r_arr, t_arr, project_func):
     n_points = len(points_3d)
@@ -207,6 +269,33 @@ def bundle_adjust_board_points_only(img_pts_arr, fnames_arr, board_shape, k_arr,
 
 
 # ==========  BACK-END FUNCTION MANAGER  ==========
+
+def _sba_extrinsic_params(scene_fpath, points_fpaths, out_fpath, triangulate_func, project_func):
+    # load points
+    img_pts_arr = []
+    fnames_arr = []
+    board_shape = None
+    camera_indices = range(len(points_fpaths))
+    for i in camera_indices:
+        p_fp = points_fpaths[i]
+        points, fnames, board_shape, *_ = load_points(p_fp)
+        img_pts_arr.append(points)
+        fnames_arr.append(fnames)
+    # load scene
+    k_arr, d_arr, r_arr, t_arr, cam_res = load_scene(scene_fpath)
+    assert len(k_arr) == len(img_pts_arr)
+    print('bundle_adjust_extrinsics')
+    # (n_points, [x,y]), (n_3d_points, [x,y,z]), (3d_point_indices), (camera_indices)
+    points_2d, points_3d, point_3d_indices, camera_indices = prepare_calib_board_data_for_bundle_adjustment(
+        img_pts_arr, fnames_arr, board_shape, k_arr, d_arr, r_arr, t_arr, triangulate_func, num_view_points=3)
+    obj_pts, r_arr, t_arr, res = bundle_adjust_extrinsics(points_2d, points_3d, point_3d_indices, camera_indices, k_arr,
+                                                          d_arr, r_arr, t_arr, project_func)
+    print(f"\nBefore: mean: {np.mean(res['before'])}, std: {np.std(res['before'])}")
+    print(f"After: mean: {np.mean(res['after'])}, std: {np.std(res['after'])}\n")
+
+    save_scene(out_fpath, k_arr, d_arr, r_arr, t_arr, cam_res)
+    return res, points_3d, obj_pts
+
 
 def _sba_board_points(scene_fpath, points_fpaths, manual_points_fpath, out_fpath, triangulate_func, project_func, camera_indices=None, manual_points_only=False):
     # load points
