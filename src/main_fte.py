@@ -15,7 +15,6 @@ from scipy.interpolate import UnivariateSpline
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 from lib import misc, utils, app, metric
-# from lib.calib import triangulate_points_fisheye, project_points_fisheye
 from lib.calib import triangulate_points, project_points
 import matplotlib.pyplot as plt
 
@@ -374,7 +373,7 @@ def plot_cheetah(root_dir: str,
                  plot_reprojections=False,
                  centered=False):
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
-    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir), "2_cam_scene.json")
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir), "3_cam_scene_sba.json")
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     app.plot_cheetah_reconstruction(fte_file,
@@ -393,6 +392,7 @@ def run(
     loss='redescending',
     enable_ppms: bool = False,
     enable_shutter_delay: bool = False,
+    sync_offset: List[Dict] = None,
     opt=None,
     generate_reprojection_videos: bool = False,
     out_dir_prefix: str = None,
@@ -435,19 +435,16 @@ def run(
 
     # ========= IMPORT CAMERA & SCENE PARAMS ========
     try:
-        k_arr, d_arr, r_arr, t_arr, cam_res, n_cams, scene_fpath = utils.find_scene_file(data_dir, "2_cam_scene.json")
-        # k_arr, d_arr, r_arr, t_arr, cam_res = utils.load_scene(os.path.join(data_dir, "extrinsic_calib", "2_cam_scene.json"), True)
-        # n_cams = 2
+        k_arr, d_arr, r_arr, t_arr, _, n_cams, scene_fpath = utils.find_scene_file(data_dir)
     except Exception:
         print('Early exit because extrinsic calibration files could not be located')
         return
     d_arr = d_arr.reshape((-1, 4))
 
     # load video info
-    res, fps, num_frames = 0, 0, 0
+    fps, num_frames = 0, 0
     if platform.python_implementation() == "CPython":
-        res, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
-        assert res == cam_res
+        _, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
     elif platform.python_implementation() == "PyPy":
         fps = 1000
 
@@ -458,6 +455,11 @@ def run(
     # load measurement dataframe (pixels, likelihood)
     points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
     filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]  # ignore points with low likelihood
+    sync_offset_arr = [0] * n_cams
+    if sync_offset is not None:
+        for offset in sync_offset:
+            filtered_points_2d_df.loc[filtered_points_2d_df['camera'] == offset["cam"], "frame"] += offset["frame"]
+            sync_offset_arr[offset["cam"]] = offset["frame"]
 
     if platform.python_implementation() == "PyPy":
         # At the moment video reading does not work with openCV and PyPy - well at least not on the Linux i9.
@@ -506,11 +508,6 @@ def run(
         end_frame = num_frames
         N = end_frame - start_frame
 
-    # For memory reasons - do not perform optimisation on trajectories larger than 200 points.
-    # if N > 200:
-    #     end_frame = start_frame + 200
-    #     N = end_frame - start_frame
-
     ## ========= POSE FUNCTIONS ========
     try:
         pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions_with_paws.pickle'))
@@ -528,17 +525,8 @@ def run(
         y_2d = x * R[1, 0] + y * R[1, 1] + z * R[1, 2] + t.flatten()[1]
         z_2d = x * R[2, 0] + y * R[2, 1] + z * R[2, 2] + t.flatten()[2]
         #project onto camera plane
-        a = x_2d / z_2d
-        b = y_2d / z_2d
-        #fisheye params
-        r = (a**2 + b**2)**0.5
-        th = pyo.atan(r)
-        #distortion
-        th_d = th * (1 + D[0] * th**2 + D[1] * th**4 + D[2] * th**6 + D[3] * th**8)
-        x_p = a * th_d / (r + 1e-12)
-        y_p = b * th_d / (r + 1e-12)
-        u = K[0, 0] * x_p + K[0, 2]
-        v = K[1, 1] * y_p + K[1, 2]
+        u = K[0, 0] * (x_2d / z_2d) + K[0, 2]
+        v = K[1, 1] * (y_2d / z_2d) + K[1, 2]
         return u, v
 
     def pt3d_to_x2d(x, y, z, K, D, R, t):
@@ -672,19 +660,9 @@ def run(
     for path in df_paths:
         # Pairwise correspondence data.
         h5_filename = os.path.basename(path)
-        # pw_data[cam_idx] = utils.load_pickle(
-        #     os.path.join(dlc_dir + '_pw', f'{h5_filename[:4]}DLC_resnet152_CheetahOct14shuffle4_650000.pickle'))
         df_temp = pd.read_hdf(os.path.join(dlc_dir, h5_filename))
         base_data[cam_idx] = list(df_temp.to_numpy())
         cam_idx += 1
-
-    # There has been a case where some camera view points have less frames than others.
-    # This can cause an issue when using automatic frame selection.
-    # Therefore, ensure that the end frame is within range.
-    # min_num_frames = min([len(val) for val in pw_data.values()])
-    # if end_frame > min_num_frames:
-    #     end_frame = min_num_frames
-    #     N = end_frame - start_frame
 
     print('Prepare data - End')
 
@@ -726,7 +704,7 @@ def run(
         # likelihoods = values['pose'][2::3]
         if w < 2:
             base = index_dict[marker]
-            likelihoods = base_data[cam_idx][(n - 1) + start_frame][2::3]
+            likelihoods = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][2::3]
         else:
             try:
                 base = pair_dict[marker][w - 2]
@@ -747,7 +725,7 @@ def run(
         marker = markers[l - 1]
         if w < 2:
             base = index_dict[marker]
-            val = base_data[cam_idx][(n - 1) + start_frame][d2 - 1::3]
+            val = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][d2 - 1::3]
 
             return val[base]
         else:
