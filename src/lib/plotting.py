@@ -189,7 +189,7 @@ class Scene(Animation):
         self.view.addItem(calib_board)
 
     def plot_points(self, points, color=[0]+[0.5]*3, size=None):
-        scatter = gl.GLScatterPlotItem(pos=points, color=color, size=size if size else self.screen_res[0]/500, pxMode=True)
+        scatter = gl.GLScatterPlotItem(pos=points, color=color, size=size if size else self.screen_res[0]/300, pxMode=True)
         scatter.setGLOptions('translucent')
         self.view.addItem(scatter)
 

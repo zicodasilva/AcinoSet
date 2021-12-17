@@ -290,7 +290,6 @@ def find_scene_file(dir_path, scene_fname=None, verbose=True):
 
     if dir_path and dir_path != os.path.sep and dir_path != os.path.join('..', 'data'):
         scene_fpath = os.path.join(dir_path, 'extrinsic_calib', scene_fname)
-        print(scene_fpath)
         # ignore [1-9]_cam_scene_before_corrections.json unless specified
         scene_files = sorted([
             scene_file for scene_file in glob(scene_fpath)

@@ -16,7 +16,7 @@ def calibrate_camera(obj_pts: Array[np.float32, ..., 3], img_pts: Array[np.float
     assert len(img_pts) >= 4, 'Need at least 4 vaild frames to perform calibration.'
     obj_pts = np.repeat(obj_pts[np.newaxis, :, :], img_pts.shape[0], axis=0).reshape((img_pts.shape[0], -1, 1, 3))
     img_pts = img_pts.reshape((img_pts.shape[0], -1, 1, 2))
-    flags = cv.CALIB_RATIONAL_MODEL + cv.CALIB_FIX_PRINCIPAL_POINT + cv.CALIB_ZERO_TANGENT_DIST + cv.CALIB_FIX_K3 + cv.CALIB_FIX_K4 + cv.CALIB_FIX_K5 + cv.CALIB_FIX_K6
+    flags = cv.CALIB_RATIONAL_MODEL + cv.CALIB_FIX_PRINCIPAL_POINT + cv.CALIB_ZERO_TANGENT_DIST + cv.CALIB_FIX_K2  + cv.CALIB_FIX_K3 + cv.CALIB_FIX_K4 + cv.CALIB_FIX_K5 + cv.CALIB_FIX_K6
     ret, k, d, r, t = cv.calibrateCamera(obj_pts, img_pts, cam_res, None, None, flags=flags)
     if ret:
         return k, d, r, t
