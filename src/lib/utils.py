@@ -2,7 +2,7 @@ import os
 import json
 import pickle
 import dill
-from typing import Dict, Any
+from typing import Dict, Any, List
 import numpy as np
 import pandas as pd
 from glob import glob
@@ -229,6 +229,7 @@ def save_3d_cheetah_as_2d(positions_3d_arr,
                           bodyparts,
                           project_func,
                           start_frame,
+                          sync_offset_arr: List[int],
                           save_as_csv=True,
                           out_fname=None,
                           vid_dir=None):
@@ -253,7 +254,6 @@ def save_3d_cheetah_as_2d(positions_3d_arr,
         for i in range(len(video_fpaths)):
             position_3d = np.array(positions_3d_arr[i])
             n_frames = len(position_3d)
-            print(position_3d.shape)
             projections = project_func(position_3d, k_arr[i], d_arr[i], r_arr[i], t_arr[i])
             out_of_range_indices = np.where((projections > cam_res) | (projections < [0] * 2))[0]
             projections[out_of_range_indices] = np.nan
@@ -266,7 +266,7 @@ def save_3d_cheetah_as_2d(positions_3d_arr,
 
             df = pd.DataFrame(data.reshape((n_frames, -1)),
                               columns=pdindex,
-                              index=range(start_frame, start_frame + n_frames))
+                              index=range(start_frame - sync_offset_arr[i], start_frame + n_frames - sync_offset_arr[i]))
             if save_as_csv:
                 df.to_csv(os.path.splitext(fpath)[0] + '.csv')
             df.to_hdf(fpath, f'{out_fname}_df', format='table', mode='w')

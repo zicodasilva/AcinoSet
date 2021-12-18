@@ -392,6 +392,7 @@ def run(
     loss='redescending',
     enable_ppms: bool = False,
     enable_shutter_delay: bool = False,
+    cam_est_idx: int = -1,
     sync_offset: List[Dict] = None,
     opt=None,
     generate_reprojection_videos: bool = False,
@@ -758,8 +759,9 @@ def run(
     m.dx = pyo.Var(m.N, m.P)  #velocity
     m.ddx = pyo.Var(m.N, m.P)  #acceleration
     m.poses = pyo.Var(m.N, m.L, m.D3)
-    m.R3 = pyo.Var(m.D3, m.D3)
-    m.t3 = pyo.Var(m.D3)
+    if cam_est_idx >= 0:
+        m.R = pyo.Var(m.D3, m.D3)
+        m.t = pyo.Var(m.D3)
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
     if enable_shutter_delay:
@@ -790,12 +792,13 @@ def run(
             for d3 in m.D3:
                 m.poses[n, l, d3].value = pos[d3 - 1]
 
-    for i in m.D3:
-        for j in m.D3:
-            m.R3[i, j].value = r_arr[2][i - 1, j - 1]
-        m.t3[i].value = t_arr[2].flatten()[i - 1]
-    print('Initial CAM3 R:', [[m.R3[i, j].value for i in m.D3] for j in m.D3])
-    print('Initial CAM3 t:', [m.t3[i].value for i in m.D3])
+    if cam_est_idx >= 0:
+        for i in m.D3:
+            for j in m.D3:
+                m.R[i, j].value = r_arr[cam_est_idx][i - 1, j - 1]
+            m.t[i].value = t_arr[cam_est_idx].flatten()[i - 1]
+        print('Initial CAM3 R:', [[m.R[i, j].value for i in m.D3] for j in m.D3])
+        print('Initial CAM3 t:', [m.t[i].value for i in m.D3])
 
 
     print('Variable initialisation...Done')
@@ -839,11 +842,11 @@ def run(
         cam_idx = c - 1
         tau = m.shutter_delay[c] if enable_shutter_delay else 0.0
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
-        var_enabled = False
-        # if cam_idx == 2:
-        #     R = m.R3
-        #     t = m.t3
-        #     var_enabled = True
+        var_enable = False
+        if cam_idx == cam_est_idx:
+            R = m.R
+            t = m.t
+            var_enable = True
         x = m.poses[n, l,
                     _pyo_i(idx['x_0'])] + m.dx[n, _pyo_i(idx['x_0'])] * tau + m.ddx[n, _pyo_i(idx['x_0'])] * (tau**2)
         y = m.poses[n, l,
@@ -851,45 +854,46 @@ def run(
         z = m.poses[n, l,
                     _pyo_i(idx['z_0'])] + m.dx[n, _pyo_i(idx['z_0'])] * tau + m.ddx[n, _pyo_i(idx['z_0'])] * (tau**2)
 
-        return proj_funcs[d2 - 1](x, y, z, K, D, R, t, var_enabled) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2,
+        return proj_funcs[d2 - 1](x, y, z, K, D, R, t, var_enable) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2,
                                                                                                             w] == 0.0
 
     m.measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule=measurement_constraints)
 
-    rot_matrix = np.array([[m.R3[i, j] for i in m.D3] for j in m.D3])
-    rot_identity = rot_matrix.dot(rot_matrix.T)
-    def det(a):
-        return (a[0][0] * (a[1][1] * a[2][2] - a[2][1] * a[1][2])
-            -a[1][0] * (a[0][1] * a[2][2] - a[2][1] * a[0][2])
-            +a[2][0] * (a[0][1] * a[1][2] - a[1][1] * a[0][2]))
+    if cam_est_idx >= 0:
+        rot_matrix = np.array([[m.R[i, j] for i in m.D3] for j in m.D3])
+        rot_identity = rot_matrix.dot(rot_matrix.T)
+        def det(a):
+            return (a[0][0] * (a[1][1] * a[2][2] - a[2][1] * a[1][2])
+                -a[1][0] * (a[0][1] * a[2][2] - a[2][1] * a[0][2])
+                +a[2][0] * (a[0][1] * a[1][2] - a[1][1] * a[0][2]))
 
-    m.rot_identity_constraint = pyo.Constraint(m.D3,
-                                               m.D3,
-                                               rule=lambda m, i, j: rot_identity[i - 1, j - 1] == 1.0
-                                               if i == j else rot_identity[i - 1, j - 1] == 0.0)
-    m.rot_det_constraint = pyo.Constraint(rule=lambda m: det(rot_matrix) == 1.0)
-    m.t_x = pyo.Constraint(rule=lambda m: (-5.0, m.t3[1], 0.0))
-    m.t_y = pyo.Constraint(rule=lambda m: (-0.5, m.t3[2], 0.5))
-    m.t_z = pyo.Constraint(rule=lambda m: (10.0, m.t3[3], 25.0))
-    m.rot_constraint = pyo.Constraint(m.D3, m.D3, rule=lambda m, i, j: (-1.0, m.R[i, j], 1.0))
+        m.rot_identity_constraint = pyo.Constraint(m.D3,
+                                                m.D3,
+                                                rule=lambda m, i, j: rot_identity[i - 1, j - 1] == 1.0
+                                                if i == j else rot_identity[i - 1, j - 1] == 0.0)
+        m.rot_det_constraint = pyo.Constraint(rule=lambda m: det(rot_matrix) == 1.0)
+        m.t_x = pyo.Constraint(rule=lambda m: (-3.0, m.t[1], 0.0))
+        m.t_y = pyo.Constraint(rule=lambda m: (0.0, m.t[2], 1.5))
+        m.t_z = pyo.Constraint(rule=lambda m: (20.0, m.t[3], 27.0))
+        m.rot_constraint = pyo.Constraint(m.D3, m.D3, rule=lambda m, i, j: (-1.0, m.R[i, j], 1.0))
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     # Head
-    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['phi_0'])], 0.05))
+    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['phi_0'])], 0.1))
     m.head_theta_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_0'])], np.pi / 6))
     m.head_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: m.x[n - 1, _pyo_i(idx['psi_0'])] == m.x[n, _pyo_i(idx['psi_0'])] if n > 1 else pyo.Constraint.Skip)
     # Neck
-    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['phi_1'])], 0.05))
+    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['phi_1'])], 0.1))
     m.neck_theta_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_1'])], np.pi / 6))
-    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['psi_1'])], 0.05))
+    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['psi_1'])], 0.1))
     # Front torso
     m.front_torso_theta_2 = pyo.Constraint(m.N,
                                            rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_2'])], np.pi / 6))
     # Back torso
     m.back_torso_theta_3 = pyo.Constraint(m.N,
                                           rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_3'])], np.pi / 6))
-    m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['phi_3'])], 0.05))
-    m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['psi_3'])], 0.05))
+    m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['phi_3'])], 0.1))
+    m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['psi_3'])], 0.1))
     # Tail base
     m.tail_base_theta_4 = pyo.Constraint(m.N,
                                          rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['theta_4'])],
@@ -989,9 +993,9 @@ def run(
     print('Generate outputs...')
     if enable_shutter_delay:
         print('shutter delay:', [m.shutter_delay[c].value for c in m.C])
-
-    print('CAM3 R3:', [[m.R3[i, j].value for i in m.D3] for j in m.D3])
-    print('CAM3 t3:', [m.t3[i].value for i in m.D3])
+    if cam_est_idx >= 0:
+        print('CAM3 R3:', [[m.R[i, j].value for i in m.D3] for j in m.D3])
+        print('CAM3 t3:', [m.t[i].value for i in m.D3])
     # ===== SAVE FTE RESULTS =====
     x_optimised = _get_vals_v(m.x, [m.N, m.P])
     dx_optimised = _get_vals_v(m.dx, [m.N, m.P])
@@ -1023,6 +1027,7 @@ def run(
                                 markers,
                                 project_points,
                                 start_frame,
+                                sync_offset_arr,
                                 out_fname='fte')
 
     # Create 2D reprojection videos.
