@@ -45,7 +45,7 @@ def validate_dataset(root_dir: str) -> List:
         position = {}
         for m_i,m in enumerate(markers):
             for c_i,c in enumerate(coords):
-                    position.update({(m,c):np.array([data['positions'][f][m_i][c_i] for f in range(len(data['positions']))])})
+                position.update({(m,c):np.array([data['positions'][f][m_i][c_i] for f in range(len(data['positions']))])})
         # flip direction if running towards -x
         if position['neck_base','x'][-1] < position['neck_base','x'][0]:
             for m in markers:
@@ -422,7 +422,7 @@ def run(root_dir: str,
         return
     d_arr = d_arr.reshape((-1, 4))
 
-     # load video info
+    # load video info
     res, fps, num_frames = 0, 0, 0
     if platform.python_implementation() == "CPython":
         res, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
@@ -912,7 +912,7 @@ def run(root_dir: str,
     # RUN THE SOLVER
     if opt is None:
         opt = SolverFactory(
-            'ipopt',  executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else None
+            'ipopt',  executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else "/Users/zico/msc/dev/lib/Ipopt/build/bin/ipopt"
         )
         # solver options
         opt.options['print_level'] = 5
@@ -967,7 +967,7 @@ def run(root_dir: str,
 
     out_fpath = os.path.join(out_dir, 'fte.pickle')
     utils.save_optimised_cheetah(positions, out_fpath, extra_data=dict(**states, start_frame=start_frame))
-    utils.save_3d_cheetah_as_2d(positions_3ds,
+    utils.save_3d_cheetah_as_2d(positions_3ds[0],
                                 out_dir,
                                 scene_fpath,
                                 markers,
