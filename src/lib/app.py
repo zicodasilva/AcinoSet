@@ -142,8 +142,8 @@ def calibrate_standard_extrinsics_pairwise(camera_fpaths,
                                    dummy_scene_fpath, manual_points_fpath)
 
 def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path1, cam_path2):
-    img_pts_1, fnames, _, _, cam_res = load_points(points_path1)
-    img_pts_2, fnames, _, _, cam_res = load_points(points_path2)
+    img_pts_1, fnames1, _, _, cam_res = load_points(points_path1)
+    img_pts_2, fnames2, _, _, cam_res = load_points(points_path2)
     k_arr = []
     d_arr = []
     for c in [cam_path1, cam_path2]:
@@ -158,6 +158,8 @@ def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path1
     # Set camera 1's initial position and rotation
     r_arr[0] = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float32)
     t_arr[0] = np.array([[0, 0, 0]], dtype=np.float32).T
+    # Get common points between the two cameras.
+    img_pts_1, img_pts_2, _ = common_image_points(img_pts_1, fnames1, img_pts_2, fnames2)
     rms, r, t = calibrate_pair_extrinsics(obj_pts, img_pts_1, img_pts_2, k1, d1, k2, d2, cam_res)
     print(f"Extrinsic calibration reprojection error (px): {rms:.4f}")
     r_arr[1] = r @ r_arr[0]

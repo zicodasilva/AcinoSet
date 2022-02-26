@@ -373,7 +373,7 @@ def plot_cheetah(root_dir: str,
                  plot_reprojections=False,
                  centered=False):
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
-    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir), "3_cam_scene_sba.json")
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir), "2_cam_scene_sba.json")
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     app.plot_cheetah_reconstruction(fte_file,
@@ -511,12 +511,12 @@ def run(
 
     ## ========= POSE FUNCTIONS ========
     try:
-        pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions_with_paws.pickle'))
+        pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions.pickle'))
     except FileNotFoundError:
         print('Lambdify pose functions and save to file for re-use in the future...')
         _create_pose_functions(root_dir)
 
-    pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions_with_paws.pickle'))
+    pose_to_3d, pos_funcs = utils.load_dill(os.path.join(root_dir, 'pose_3d_functions.pickle'))
     idx = misc.get_pose_params()
     sym_list = list(idx.keys())
 
@@ -966,7 +966,7 @@ def run(
     # RUN THE SOLVER
     if opt is None:
         opt = SolverFactory('ipopt',
-                            executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else None)
+                            executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else "/Users/zico/msc/dev/lib/Ipopt/build/bin/ipopt")
         # solver options
         opt.options['print_level'] = 5
         opt.options['max_iter'] = 400
