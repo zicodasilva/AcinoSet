@@ -373,7 +373,7 @@ def plot_cheetah(root_dir: str,
                  plot_reprojections=False,
                  centered=False):
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
-    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir), "2_cam_scene_sba.json")
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     app.plot_cheetah_reconstruction(fte_file,

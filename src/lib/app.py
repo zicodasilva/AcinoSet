@@ -156,8 +156,10 @@ def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path1
     r_arr = [[], []]
     t_arr = r_arr.copy()
     # Set camera 1's initial position and rotation
-    r_arr[0] = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float32)
-    t_arr[0] = np.array([[0, 0, 0]], dtype=np.float32).T
+    r_arr[0] = np.array([[-0.99941002, -0.03348583, 0.00763645], [-0.01263492, 0.15170656, -0.98834482], [0.03193705, -0.9878582, -0.15204015]], dtype=np.float32)
+    # r_arr[0] = np.array([[-0.99941002, -0.01263492, 0.03193705], [-0.03348583, 0.15170656, -0.9878582], [0.00763645, -0.98834482, -0.15204015]], dtype=np.float32)
+    # t_arr[0] = np.array([[1.08204442, 4.47259504, 1.0055871]], dtype=np.float32).T
+    t_arr[0] = np.array([[1.10580141, 0.35108859, 4.56509277]], dtype=np.float32).T
     # Get common points between the two cameras.
     img_pts_1, img_pts_2, _ = common_image_points(img_pts_1, fnames1, img_pts_2, fnames2)
     rms, r, t = calibrate_pair_extrinsics(obj_pts, img_pts_1, img_pts_2, k1, d1, k2, d2, cam_res)
