@@ -97,8 +97,10 @@ def initialize_marker_3d(pts_2d_df, marker, k_arr, d_arr, r_arr, t_arr, dlc_thre
 # ==========  CALIBRATION  ==========
 
 
-def calibrate_arabia_intrinsics(points_fpath: str, out_fpath: str):
+def calibrate_arabia_intrinsics(points_fpath: str, out_fpath: str, reduce_points: bool = False):
     points, _, _, _, cam_res = load_points(points_fpath)
+    if reduce_points:
+        points = points[0:-1:2, :]
     obj_pts = create_arabia_board_pts()
     k, d, r, t = calibrate_camera(obj_pts, points, cam_res)
     print('K:\n', k, '\nD:\n', d)
@@ -141,7 +143,8 @@ def calibrate_standard_extrinsics_pairwise(camera_fpaths,
     _calibrate_pairwise_extrinsics(calibrate_pair_extrinsics, camera_fpaths, points_fpaths, out_fpath,
                                    dummy_scene_fpath, manual_points_fpath)
 
-def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path1, cam_path2):
+
+def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path1, cam_path2, init_r, init_t):
     img_pts_1, fnames1, _, _, cam_res = load_points(points_path1)
     img_pts_2, fnames2, _, _, cam_res = load_points(points_path2)
     k_arr = []
@@ -156,10 +159,8 @@ def calibrate_arabia_extrinsics(out_fpath, points_path1, points_path2, cam_path1
     r_arr = [[], []]
     t_arr = r_arr.copy()
     # Set camera 1's initial position and rotation
-    r_arr[0] = np.array([[-0.99941002, -0.03348583, 0.00763645], [-0.01263492, 0.15170656, -0.98834482], [0.03193705, -0.9878582, -0.15204015]], dtype=np.float32)
-    # r_arr[0] = np.array([[-0.99941002, -0.01263492, 0.03193705], [-0.03348583, 0.15170656, -0.9878582], [0.00763645, -0.98834482, -0.15204015]], dtype=np.float32)
-    # t_arr[0] = np.array([[1.08204442, 4.47259504, 1.0055871]], dtype=np.float32).T
-    t_arr[0] = np.array([[1.10580141, 0.35108859, 4.56509277]], dtype=np.float32).T
+    r_arr[0] = init_r
+    t_arr[0] = init_t
     # Get common points between the two cameras.
     img_pts_1, img_pts_2, _ = common_image_points(img_pts_1, fnames1, img_pts_2, fnames2)
     rms, r, t = calibrate_pair_extrinsics(obj_pts, img_pts_1, img_pts_2, k1, d1, k2, d2, cam_res)
@@ -181,14 +182,12 @@ def calibrate_fisheye_extrinsics_pairwise(camera_fpaths,
 # ==========  SBA  ==========
 
 
-def sba_extrinsic_params_standard(scene_fpath,
-                              points_fpaths,
-                              out_fpath, num_view_points = 2):
+def sba_extrinsic_params_standard(scene_fpath, points_fpaths, out_fpath, num_view_points=2):
     return _sba_extrinsic_params(scene_fpath, points_fpaths, out_fpath, triangulate_points, project_points,
                                  num_view_points)
 
 
-def sba_points_and_extrinsic_params_standard(scene_fpath, points_fpaths, out_fpath, robust = False, f_scale = 100):
+def sba_points_and_extrinsic_params_standard(scene_fpath, points_fpaths, out_fpath, robust=False, f_scale=100):
     return _sba_points_and_extrinsic_params(scene_fpath, points_fpaths, out_fpath, triangulate_points, project_points,
                                             robust, f_scale)
 
