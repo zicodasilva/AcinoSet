@@ -296,7 +296,7 @@ class Cheetah(Animation):
     def animation(self):
         timer = QtCore.QTimer()
         timer.timeout.connect(self.update)
-        timer.start(10) # speed of reconstruction
+        timer.start(100) # speed of reconstruction
         self.show()
 
 
