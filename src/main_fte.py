@@ -383,6 +383,26 @@ def plot_cheetah(root_dir: str,
                                     centered=centered)
 
 
+def compare_cheetahs(root_dir: str,
+                     data_dir: str,
+                     out_dir_prefix: str = None,
+                     fte_type1: str = "sd_fte",
+                     fte_type2: str = "sd_fte",
+                     plot_reprojections=False,
+                     centered=False):
+    fte_file1 = os.path.join(root_dir, data_dir, fte_type1, "fte.pickle")
+    fte_file2 = os.path.join(root_dir, data_dir, fte_type2, "fte.pickle")
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
+    if out_dir_prefix is not None:
+        fte_file1 = os.path.join(out_dir_prefix, data_dir, fte_type1, "fte.pickle")
+        fte_file2 = os.path.join(out_dir_prefix, data_dir, fte_type2, "fte.pickle")
+    app.plot_multiple_cheetah_reconstructions([fte_file1, fte_file2],
+                                              scene_fname=scene_fpath,
+                                              reprojections=plot_reprojections,
+                                              dark_mode=True,
+                                              centered=centered)
+
+
 def run(
     root_dir: str,
     data_path: str,
@@ -428,7 +448,7 @@ def run(
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
-    dlc_dir = os.path.join(data_dir, 'dlc')
+    dlc_dir = os.path.join(data_dir, 'dlc_hand_labeled')
     assert os.path.exists(dlc_dir)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -447,15 +467,16 @@ def run(
     if platform.python_implementation() == "CPython":
         _, fps, num_frames, _ = app.get_vid_info(data_dir)  # path to the directory having original videos
     elif platform.python_implementation() == "PyPy":
-        fps = 1000
+        fps = 200
 
     # load DLC data
     dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
     assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json'
 
     # load measurement dataframe (pixels, likelihood)
-    points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, verbose=False)
-    filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]  # ignore points with low likelihood
+    points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, hand_labeled=True, verbose=False)
+    # filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]  # ignore points with low likelihood
+    filtered_points_2d_df = points_2d_df
     sync_offset_arr = [0] * n_cams
     if sync_offset is not None:
         for offset in sync_offset:
@@ -635,24 +656,24 @@ def run(
     #===================================================
     print('Load H5 2D DLC prediction data')
     df_paths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
-
     points_3d_df = utils.get_pairwise_3d_points_from_df(filtered_points_2d_df, k_arr, d_arr, r_arr, t_arr,
                                                         triangulate_points)
 
     # estimate initial points
     print('Estimate the initial trajectory')
     # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
-    frame_est = np.arange(end_frame)
+    frame_range = np.arange(num_frames - 1, dtype=int)
 
     nose_pts = points_3d_df[points_3d_df['marker'] == 'nose'][['frame', 'x', 'y', 'z']].values
-    nose_pts[:, 1] = nose_pts[:, 1] - 0.055
-    nose_pts[:, 3] = nose_pts[:, 3] + 0.055
-    traj_est_x = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 1])
-    traj_est_y = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 2])
-    traj_est_z = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 3])
-    x_est = np.array(traj_est_x(frame_est))
-    y_est = np.array(traj_est_y(frame_est))
-    z_est = np.array(traj_est_z(frame_est))
+    # nose_pts[:, 1] = nose_pts[:, 1] - 0.055
+    # nose_pts[:, 3] = nose_pts[:, 3] + 0.055
+    w = np.isnan(nose_pts[:, 1])
+    nose_pts[w, 1] = 0.0
+    x_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 1], w=~w, k=1)(frame_range))
+    nose_pts[w, 2] = 0.0
+    y_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 2], w=~w, k=1)(frame_range))
+    nose_pts[w, 3] = 0.0
+    z_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 3], w=~w, k=1)(frame_range))
 
     # Calculate the initial yaw.
     dx_est = np.diff(x_est) / Ts
@@ -717,7 +738,12 @@ def run(
         # likelihoods = values['pose'][2::3]
         if w < 2:
             base = index_dict[marker]
-            likelihoods = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][2::3]
+            # likelihoods = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][2::3]
+            likelihoods = np.ones((len(markers) + 1, 1)).flatten()
+            x_pixel = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][0::2][base]
+            y_pixel = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][1::2][base]
+            if x_pixel == np.nan and y_pixel == np.nan:
+                likelihoods[base] = 0.0
         else:
             try:
                 base = pair_dict[marker][w - 2]
@@ -738,9 +764,10 @@ def run(
         marker = markers[l - 1]
         if w < 2:
             base = index_dict[marker]
-            val = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][d2 - 1::3]
+            # val = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][d2 - 1::3]
+            val = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][d2 - 1::2]
 
-            return val[base]
+            return val[base] if val[base] != np.nan else 0.0
         else:
             try:
                 values = pw_data[cam_idx][(n - 1) + start_frame]
@@ -800,7 +827,6 @@ def run(
         print('Initial CAM3 R:', [[m.R[i, j].value for i in m.D3] for j in m.D3])
         print('Initial CAM3 t:', [m.t[i].value for i in m.D3])
 
-
     print('Variable initialisation...Done')
 
     # ===== CONSTRAINTS =====
@@ -855,22 +881,22 @@ def run(
                     _pyo_i(idx['z_0'])] + m.dx[n, _pyo_i(idx['z_0'])] * tau + m.ddx[n, _pyo_i(idx['z_0'])] * (tau**2)
 
         return proj_funcs[d2 - 1](x, y, z, K, D, R, t, var_enable) - m.meas[n, c, l, d2, w] - m.slack_meas[n, c, l, d2,
-                                                                                                            w] == 0.0
+                                                                                                           w] == 0.0
 
     m.measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule=measurement_constraints)
 
     if cam_est_idx >= 0:
         rot_matrix = np.array([[m.R[i, j] for i in m.D3] for j in m.D3])
         rot_identity = rot_matrix.dot(rot_matrix.T)
+
         def det(a):
-            return (a[0][0] * (a[1][1] * a[2][2] - a[2][1] * a[1][2])
-                -a[1][0] * (a[0][1] * a[2][2] - a[2][1] * a[0][2])
-                +a[2][0] * (a[0][1] * a[1][2] - a[1][1] * a[0][2]))
+            return (a[0][0] * (a[1][1] * a[2][2] - a[2][1] * a[1][2]) - a[1][0] *
+                    (a[0][1] * a[2][2] - a[2][1] * a[0][2]) + a[2][0] * (a[0][1] * a[1][2] - a[1][1] * a[0][2]))
 
         m.rot_identity_constraint = pyo.Constraint(m.D3,
-                                                m.D3,
-                                                rule=lambda m, i, j: rot_identity[i - 1, j - 1] == 1.0
-                                                if i == j else rot_identity[i - 1, j - 1] == 0.0)
+                                                   m.D3,
+                                                   rule=lambda m, i, j: rot_identity[i - 1, j - 1] == 1.0
+                                                   if i == j else rot_identity[i - 1, j - 1] == 0.0)
         m.rot_det_constraint = pyo.Constraint(rule=lambda m: det(rot_matrix) == 1.0)
         m.t_x = pyo.Constraint(rule=lambda m: (-3.0, m.t[1], 0.0))
         m.t_y = pyo.Constraint(rule=lambda m: (0.0, m.t[2], 1.5))
@@ -879,28 +905,32 @@ def run(
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     # Head
-    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['phi_0'])], 0.1))
-    m.head_theta_0 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_0'])], np.pi / 6))
-    m.head_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: m.x[n - 1, _pyo_i(idx['psi_0'])] == m.x[n, _pyo_i(idx['psi_0'])] if n > 1 else pyo.Constraint.Skip)
+    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['phi_0'])], 0.05))
+    m.head_theta_0 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['theta_0'])], 0.1))
+    m.head_psi_1 = pyo.Constraint(m.N,
+                                  rule=lambda m, n: m.x[n - 1, _pyo_i(idx['psi_0'])] == m.x[n, _pyo_i(idx['psi_0'])]
+                                  if n > 1 else pyo.Constraint.Skip)
     # Neck
-    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['phi_1'])], 0.1))
+    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['phi_1'])], 0.05))
     m.neck_theta_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_1'])], np.pi / 6))
-    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['psi_1'])], 0.1))
+    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['psi_1'])], 0.05))
     # Front torso
     m.front_torso_theta_2 = pyo.Constraint(m.N,
                                            rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_2'])], np.pi / 6))
     # Back torso
     m.back_torso_theta_3 = pyo.Constraint(m.N,
                                           rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_3'])], np.pi / 6))
-    m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['phi_3'])], 0.1))
-    m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['psi_3'])], 0.1))
+    m.back_torso_phi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['phi_3'])], 0.05))
+    m.back_torso_psi_3 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['psi_3'])], 0.05))
     # Tail base
     m.tail_base_theta_4 = pyo.Constraint(m.N,
                                          rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['theta_4'])],
                                                             (2 / 3) * np.pi))
-    m.tail_base_psi_4 = pyo.Constraint(m.N,
-                                       rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['psi_4'])],
-                                                          (2 / 3) * np.pi))
+    # m.tail_base_psi_4 = pyo.Constraint(m.N,
+    #                                    rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['psi_4'])],
+    #                                                       (2 / 3) * np.pi))
+    #                                                             (2 / 3) * np.pi))
+    m.tail_base_psi_4 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['psi_4'])], 0.05))
     # Tail mid
     m.tail_mid_theta_5 = pyo.Constraint(m.N,
                                         rule=lambda m, n: (-(2 / 3) * np.pi, m.x[n, _pyo_i(idx['theta_5'])],
@@ -966,7 +996,8 @@ def run(
     # RUN THE SOLVER
     if opt is None:
         opt = SolverFactory('ipopt',
-                            executable="/home/zico/lib/ipopt/build/bin/ipopt" if platform.system() == "Linux" else "/Users/zico/msc/dev/lib/Ipopt/build/bin/ipopt")
+                            executable="/home/zico/lib/ipopt/build/bin/ipopt"
+                            if platform.system() == "Linux" else "/Users/zico/msc/dev/lib/Ipopt/build/bin/ipopt")
         # solver options
         opt.options['print_level'] = 5
         opt.options['max_iter'] = 400

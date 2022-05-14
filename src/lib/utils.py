@@ -125,10 +125,14 @@ def load_scene(fpath, verbose=True):
     return k_arr, d_arr, r_arr, t_arr, cam_res
 
 
-def load_dlc_points_as_df(dlc_df_fpaths, verbose=True):
+def load_dlc_points_as_df(dlc_df_fpaths, hand_labeled=False, verbose=True):
     dfs = []
     for path in dlc_df_fpaths:
         dlc_df = pd.read_hdf(path)
+        if hand_labeled:
+            start_frame = int(dlc_df.index[0][-1][3:6])
+            end_frame = int(dlc_df.index[-1][-1][3:6])
+            dlc_df = dlc_df.set_index(pd.Index(list(range(start_frame, end_frame + 1))))
         dlc_df = dlc_df.droplevel([0],
                                   axis=1).swaplevel(0, 1,
                                                     axis=1).T.unstack().T.reset_index().rename({'level_0': 'frame'},
@@ -145,6 +149,7 @@ def load_dlc_points_as_df(dlc_df_fpaths, verbose=True):
     dlc_df = dlc_df[['frame', 'camera', 'marker', 'x', 'y', 'likelihood']]
     if verbose:
         print(f'DLC points dataframe:\n{dlc_df}\n')
+
     return dlc_df
 
 
@@ -266,7 +271,8 @@ def save_3d_cheetah_as_2d(positions_3d_arr,
 
             df = pd.DataFrame(data.reshape((n_frames, -1)),
                               columns=pdindex,
-                              index=range(start_frame - sync_offset_arr[i], start_frame + n_frames - sync_offset_arr[i]))
+                              index=range(start_frame - sync_offset_arr[i],
+                                          start_frame + n_frames - sync_offset_arr[i]))
             if save_as_csv:
                 df.to_csv(os.path.splitext(fpath)[0] + '.csv')
             df.to_hdf(fpath, f'{out_fname}_df', format='table', mode='w')
