@@ -373,7 +373,7 @@ def plot_cheetah(root_dir: str,
                  plot_reprojections=False,
                  centered=False):
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
-    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir), "4_cam_scene.json")
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     app.plot_cheetah_reconstruction(fte_file,
@@ -414,6 +414,7 @@ def run(
     enable_shutter_delay: bool = False,
     cam_est_idx: int = -1,
     sync_offset: List[Dict] = None,
+    hand_labeled: bool = False,
     opt=None,
     generate_reprojection_videos: bool = False,
     out_dir_prefix: str = None,
@@ -448,7 +449,7 @@ def run(
 
     data_dir = os.path.join(root_dir, data_path)
     assert os.path.exists(data_dir)
-    dlc_dir = os.path.join(data_dir, 'dlc_hand_labeled')
+    dlc_dir = os.path.join(data_dir, 'dlc' if not hand_labeled else 'dlc_hand_labeled')
     assert os.path.exists(dlc_dir)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -456,7 +457,8 @@ def run(
 
     # ========= IMPORT CAMERA & SCENE PARAMS ========
     try:
-        k_arr, d_arr, r_arr, t_arr, _, n_cams, scene_fpath = utils.find_scene_file(data_dir)
+        k_arr, d_arr, r_arr, t_arr, _, n_cams, scene_fpath = utils.find_scene_file(
+            data_dir, "4_cam_scene.json" if len(sync_offset) > 1 else "3_cam_scene.json")
     except Exception:
         print('Early exit because extrinsic calibration files could not be located')
         return
@@ -471,12 +473,15 @@ def run(
 
     # load DLC data
     dlc_points_fpaths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
-    assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.json'
+    assert n_cams == len(dlc_points_fpaths), f'# of dlc .h5 files != # of cams in {n_cams}_cam_scene_sba.jso n'
 
     # load measurement dataframe (pixels, likelihood)
-    points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, hand_labeled=True, verbose=False)
-    # filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] > dlc_thresh]  # ignore points with low likelihood
-    filtered_points_2d_df = points_2d_df
+    points_2d_df = utils.load_dlc_points_as_df(dlc_points_fpaths, hand_labeled=hand_labeled, verbose=False)
+    if hand_labeled:
+        filtered_points_2d_df = points_2d_df
+    else:
+        filtered_points_2d_df = points_2d_df[points_2d_df['likelihood'] >
+                                             dlc_thresh]  # ignore points with low likelihood
     sync_offset_arr = [0] * n_cams
     if sync_offset is not None:
         for offset in sync_offset:
@@ -544,9 +549,9 @@ def run(
     # ========= PROJECTION FUNCTIONS ========
     def pt3d_to_2d(x, y, z, K, D, R, t, pyo_var=False):
         if pyo_var:
-            x_2d = x * R[1, 1] + y * R[1, 2] + z * R[1, 3] + t[1]
-            y_2d = x * R[2, 1] + y * R[2, 2] + z * R[2, 3] + t[2]
-            z_2d = x * R[3, 1] + y * R[3, 2] + z * R[3, 3] + t[3]
+            x_2d = x * R[0, 0] + y * R[0, 1] + z * R[0, 2] + t[1]
+            y_2d = x * R[1, 0] + y * R[1, 1] + z * R[1, 2] + t[2]
+            z_2d = x * R[2, 0] + y * R[2, 1] + z * R[2, 2] + t[3]
         else:
             x_2d = x * R[0, 0] + y * R[0, 1] + z * R[0, 2] + t.flatten()[0]
             y_2d = x * R[1, 0] + y * R[1, 1] + z * R[1, 2] + t.flatten()[1]
@@ -656,24 +661,33 @@ def run(
     #===================================================
     print('Load H5 2D DLC prediction data')
     df_paths = sorted(glob(os.path.join(dlc_dir, '*.h5')))
+    filtered_points_2d_df = filtered_points_2d_df[filtered_points_2d_df["camera"] < 2]
     points_3d_df = utils.get_pairwise_3d_points_from_df(filtered_points_2d_df, k_arr, d_arr, r_arr, t_arr,
                                                         triangulate_points)
 
     # estimate initial points
     print('Estimate the initial trajectory')
     # Use the cheetahs spine to estimate the initial trajectory with a 3rd degree spline.
-    frame_range = np.arange(num_frames - 1, dtype=int)
-
     nose_pts = points_3d_df[points_3d_df['marker'] == 'nose'][['frame', 'x', 'y', 'z']].values
-    # nose_pts[:, 1] = nose_pts[:, 1] - 0.055
-    # nose_pts[:, 3] = nose_pts[:, 3] + 0.055
-    w = np.isnan(nose_pts[:, 1])
-    nose_pts[w, 1] = 0.0
-    x_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 1], w=~w, k=1)(frame_range))
-    nose_pts[w, 2] = 0.0
-    y_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 2], w=~w, k=1)(frame_range))
-    nose_pts[w, 3] = 0.0
-    z_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 3], w=~w, k=1)(frame_range))
+    nose_pts[:, 1] = nose_pts[:, 1] - 0.055
+    nose_pts[:, 3] = nose_pts[:, 3] + 0.055
+    if hand_labeled:
+        frame_range = np.arange(num_frames - 1, dtype=int)
+        w = np.isnan(nose_pts[:, 1])
+        nose_pts[w, 1] = 0.0
+        x_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 1], w=~w, k=1)(frame_range))
+        nose_pts[w, 2] = 0.0
+        y_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 2], w=~w, k=1)(frame_range))
+        nose_pts[w, 3] = 0.0
+        z_est = np.array(UnivariateSpline(frame_range, nose_pts[:, 3], w=~w, k=1)(frame_range))
+    else:
+        frame_est = np.arange(end_frame)
+        traj_est_x = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 1], k=1)
+        traj_est_y = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 2], k=1)
+        traj_est_z = UnivariateSpline(nose_pts[:, 0], nose_pts[:, 3], k=1)
+        x_est = np.array(traj_est_x(frame_est))
+        y_est = np.array(traj_est_y(frame_est))
+        z_est = np.array(traj_est_z(frame_est))
 
     # Calculate the initial yaw.
     dx_est = np.diff(x_est) / Ts
@@ -738,12 +752,14 @@ def run(
         # likelihoods = values['pose'][2::3]
         if w < 2:
             base = index_dict[marker]
-            # likelihoods = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][2::3]
-            likelihoods = np.ones((len(markers) + 1, 1)).flatten()
-            x_pixel = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][0::2][base]
-            y_pixel = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][1::2][base]
-            if x_pixel == np.nan and y_pixel == np.nan:
-                likelihoods[base] = 0.0
+            if hand_labeled:
+                likelihoods = np.ones((len(markers) + 1, 1)).flatten()
+                x_pixel = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][0::2][base]
+                y_pixel = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][1::2][base]
+                if x_pixel == np.nan and y_pixel == np.nan:
+                    likelihoods[base] = 0.0
+            else:
+                likelihoods = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][2::3]
         else:
             try:
                 base = pair_dict[marker][w - 2]
@@ -764,8 +780,10 @@ def run(
         marker = markers[l - 1]
         if w < 2:
             base = index_dict[marker]
-            # val = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][d2 - 1::3]
-            val = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][d2 - 1::2]
+            if hand_labeled:
+                val = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][d2 - 1::2]
+            else:
+                val = base_data[cam_idx][(n - 1) + start_frame - sync_offset_arr[cam_idx]][d2 - 1::3]
 
             return val[base] if val[base] != np.nan else 0.0
         else:
@@ -787,8 +805,8 @@ def run(
     m.ddx = pyo.Var(m.N, m.P)  #acceleration
     m.poses = pyo.Var(m.N, m.L, m.D3)
     if cam_est_idx >= 0:
-        m.R = pyo.Var(m.D3, m.D3)
-        m.t = pyo.Var(m.D3)
+        m.angles = pyo.Var(m.D3)
+        m.pos = pyo.Var(m.D3)
     m.slack_model = pyo.Var(m.N, m.P, initialize=0.0)
     m.slack_meas = pyo.Var(m.N, m.C, m.L, m.D2, m.W, initialize=0.0)
     if enable_shutter_delay:
@@ -819,14 +837,36 @@ def run(
             for d3 in m.D3:
                 m.poses[n, l, d3].value = pos[d3 - 1]
 
-    if cam_est_idx >= 0:
-        for i in m.D3:
-            for j in m.D3:
-                m.R[i, j].value = r_arr[cam_est_idx][i - 1, j - 1]
-            m.t[i].value = t_arr[cam_est_idx].flatten()[i - 1]
-        print('Initial CAM3 R:', [[m.R[i, j].value for i in m.D3] for j in m.D3])
-        print('Initial CAM3 t:', [m.t[i].value for i in m.D3])
+    def euler_angles(R, func):
+        roll = func(-R[1, 2], R[2, 2])
+        pitch = func(R[0, 2], np.sqrt(1 - R[0, 2]**2))
+        yaw = func(-R[0, 1], R[0, 0])
 
+        return np.array([roll, pitch, yaw])
+
+    def rot_matrix(x, y, z):
+        def rot_x(x):
+            c = pyo.cos(x)
+            s = pyo.sin(x)
+            return np.array([[1, 0, 0], [0, c, s], [0, -s, c]])
+
+        def rot_y(y):
+            c = pyo.cos(y)
+            s = pyo.sin(y)
+            return np.array([[c, 0, -s], [0, 1, 0], [s, 0, c]])
+
+        def rot_z(z):
+            c = pyo.cos(z)
+            s = pyo.sin(z)
+            return np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]])
+
+        return (rot_x(x) @ rot_y(y) @ rot_z(z)).T
+
+    if cam_est_idx >= 0:
+        init_angles = euler_angles(r_arr[cam_est_idx], np.arctan2)
+        for i in m.D3:
+            m.angles[i].value = init_angles[i - 1]
+            m.pos[i].value = t_arr[cam_est_idx].flatten()[i - 1]
     print('Variable initialisation...Done')
 
     # ===== CONSTRAINTS =====
@@ -870,8 +910,8 @@ def run(
         K, D, R, t = k_arr[cam_idx], d_arr[cam_idx], r_arr[cam_idx], t_arr[cam_idx]
         var_enable = False
         if cam_idx == cam_est_idx:
-            R = m.R
-            t = m.t
+            R = rot_matrix(m.angles[1], m.angles[2], m.angles[3])
+            t = m.pos
             var_enable = True
         x = m.poses[n, l,
                     _pyo_i(idx['x_0'])] + m.dx[n, _pyo_i(idx['x_0'])] * tau + m.ddx[n, _pyo_i(idx['x_0'])] * (tau**2)
@@ -886,34 +926,27 @@ def run(
     m.measurement = pyo.Constraint(m.N, m.C, m.L, m.D2, m.W, rule=measurement_constraints)
 
     if cam_est_idx >= 0:
-        rot_matrix = np.array([[m.R[i, j] for i in m.D3] for j in m.D3])
-        rot_identity = rot_matrix.dot(rot_matrix.T)
-
-        def det(a):
-            return (a[0][0] * (a[1][1] * a[2][2] - a[2][1] * a[1][2]) - a[1][0] *
-                    (a[0][1] * a[2][2] - a[2][1] * a[0][2]) + a[2][0] * (a[0][1] * a[1][2] - a[1][1] * a[0][2]))
-
-        m.rot_identity_constraint = pyo.Constraint(m.D3,
-                                                   m.D3,
-                                                   rule=lambda m, i, j: rot_identity[i - 1, j - 1] == 1.0
-                                                   if i == j else rot_identity[i - 1, j - 1] == 0.0)
-        m.rot_det_constraint = pyo.Constraint(rule=lambda m: det(rot_matrix) == 1.0)
-        m.t_x = pyo.Constraint(rule=lambda m: (-3.0, m.t[1], 0.0))
-        m.t_y = pyo.Constraint(rule=lambda m: (0.0, m.t[2], 1.5))
-        m.t_z = pyo.Constraint(rule=lambda m: (20.0, m.t[3], 27.0))
-        m.rot_constraint = pyo.Constraint(m.D3, m.D3, rule=lambda m, i, j: (-1.0, m.R[i, j], 1.0))
+        m.t_x = pyo.Constraint(rule=lambda m: (-5.0, m.pos[1], 1.0))
+        m.t_y = pyo.Constraint(rule=lambda m: (0.0, m.pos[2], 2.0))
+        m.t_z = pyo.Constraint(rule=lambda m: (15.0, m.pos[3], 20.0))
+        # Constrain camera roll to basically be centered, otherwise it will converge on a solution where there is a lot of "rolling",
+        # because of the small region in the image space that the cheetah occupies, and therefore can be viewed more or less the same from
+        # multiple roll angles.
+        m.cam_roll = pyo.Constraint(rule=lambda m: (1.56, m.angles[1], 1.58))
+        m.cam_pitch = pyo.Constraint(rule=lambda m: (-np.pi / 2, m.angles[2], np.pi / 2))
+        m.cam_yaw = pyo.Constraint(rule=lambda m: (-np.pi / 2, m.angles[3], np.pi / 2))
 
     #===== POSE CONSTRAINTS (Note 1 based indexing for pyomo!!!!...@#^!@#&) =====
     # Head
-    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['phi_0'])], 0.05))
+    m.head_phi_0 = pyo.Constraint(m.N, rule=lambda m, n: (-0.01, m.x[n, _pyo_i(idx['phi_0'])], 0.01))
     m.head_theta_0 = pyo.Constraint(m.N, rule=lambda m, n: (-0.1, m.x[n, _pyo_i(idx['theta_0'])], 0.1))
     m.head_psi_1 = pyo.Constraint(m.N,
                                   rule=lambda m, n: m.x[n - 1, _pyo_i(idx['psi_0'])] == m.x[n, _pyo_i(idx['psi_0'])]
                                   if n > 1 else pyo.Constraint.Skip)
     # Neck
-    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['phi_1'])], 0.05))
+    m.neck_phi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.01, m.x[n, _pyo_i(idx['phi_1'])], 0.01))
     m.neck_theta_1 = pyo.Constraint(m.N, rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_1'])], np.pi / 6))
-    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.05, m.x[n, _pyo_i(idx['psi_1'])], 0.05))
+    m.neck_psi_1 = pyo.Constraint(m.N, rule=lambda m, n: (-0.01, m.x[n, _pyo_i(idx['psi_1'])], 0.01))
     # Front torso
     m.front_torso_theta_2 = pyo.Constraint(m.N,
                                            rule=lambda m, n: (-np.pi / 6, m.x[n, _pyo_i(idx['theta_2'])], np.pi / 6))
@@ -988,7 +1021,7 @@ def run(
                         for w in m.W:
                             slack_meas_err += _loss_function(
                                 m.meas_err_weight[n, c, l, w] * m.slack_meas[n, c, l, d2, w], loss)
-        return 1e-3 * (slack_meas_err + slack_model_err)
+        return 1e-3 * (slack_meas_err) if cam_est_idx != -1 else 1e-3 * (slack_meas_err + slack_model_err)
 
     m.obj = pyo.Objective(rule=obj)
 
@@ -1000,7 +1033,7 @@ def run(
                             if platform.system() == "Linux" else "/Users/zico/msc/dev/lib/Ipopt/build/bin/ipopt")
         # solver options
         opt.options['print_level'] = 5
-        opt.options['max_iter'] = 400
+        opt.options['max_iter'] = 1000
         opt.options['max_cpu_time'] = 10000
         opt.options['Tol'] = 1e-1
         opt.options['OF_print_timing_statistics'] = 'yes'
@@ -1025,8 +1058,9 @@ def run(
     if enable_shutter_delay:
         print('shutter delay:', [m.shutter_delay[c].value for c in m.C])
     if cam_est_idx >= 0:
-        print('CAM3 R3:', [[m.R[i, j].value for i in m.D3] for j in m.D3])
-        print('CAM3 t3:', [m.t[i].value for i in m.D3])
+        print('Cam XYZ angles: ', [m.angles[i].value for i in m.D3])
+        print('Cam rotation matrix: ', rot_matrix(m.angles[1].value, m.angles[2].value, m.angles[3].value))
+        print('Cam position: ', [m.pos[i].value for i in m.D3])
     # ===== SAVE FTE RESULTS =====
     x_optimised = _get_vals_v(m.x, [m.N, m.P])
     dx_optimised = _get_vals_v(m.dx, [m.N, m.P])

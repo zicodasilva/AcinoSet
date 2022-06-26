@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Tuple, Optional
 import pickle
 import cv2 as cv
 import numpy as np
@@ -97,12 +98,20 @@ def initialize_marker_3d(pts_2d_df, marker, k_arr, d_arr, r_arr, t_arr, dlc_thre
 # ==========  CALIBRATION  ==========
 
 
-def calibrate_arabia_intrinsics(points_fpath: str, out_fpath: str, reduce_points: bool = False):
+def calibrate_arabia_intrinsics(points_fpath: str,
+                                out_fpath: str,
+                                f: Optional[Tuple[float, float]] = None,
+                                c: Optional[Tuple[float, float]] = None,
+                                reduce_points: bool = False,
+                                plot: bool = True):
     points, _, _, _, cam_res = load_points(points_fpath)
     if reduce_points:
         points = points[0:-1:2, :]
     obj_pts = create_arabia_board_pts()
-    k, d, r, t = calibrate_camera(obj_pts, points, cam_res)
+    init_k = None
+    if f is not None and c is not None:
+        init_k = np.array([[f[0], 0.0, c[0]], [0.0, f[1], c[1]], [0.0, 0.0, 1.0]])
+    k, d, r, t = calibrate_camera(obj_pts, points, cam_res, init_k)
     print('K:\n', k, '\nD:\n', d)
     save_camera(out_fpath, cam_res, k, d)
 
@@ -113,6 +122,26 @@ def calibrate_arabia_intrinsics(points_fpath: str, out_fpath: str, reduce_points
     residuals = diff.reshape(-1, 2)
     rmse = np.linalg.norm(residuals) / np.sqrt(residuals.shape[0])
     print(f"Intrinsic calibration reprojection error (px): {rmse:.4f}")
+    if plot:
+        import matplotlib as mpl
+        import matplotlib.pyplot as plt
+        import matplotlib.cm as cm
+        import cycler
+        marker_colors = cm.jet(np.linspace(0, 1, points.shape[1]))
+        mpl.rcParams['axes.prop_cycle'] = cycler.cycler('color', marker_colors)
+        plt.figure(figsize=(16, 9), dpi=120)
+        for i in range(points.shape[1]):
+            plt.scatter(projected_pts[:, i, 0],
+                        projected_pts[:, i, 1],
+                        color=marker_colors[i],
+                        alpha=0.3,
+                        label=f"p{i+1}")
+            plt.scatter(obj_projected_pts[:, i, 0], obj_projected_pts[:, i, 1], color=marker_colors[i], alpha=0.3)
+        plt.xlim((0, cam_res[0]))
+        plt.ylim((0, cam_res[1]))
+        plt.legend()
+        plt.gca().invert_yaxis()
+        plt.show(block=False)
 
     return k, d, r, t, points
 

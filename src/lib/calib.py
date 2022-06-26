@@ -1,7 +1,7 @@
 import json
 import cv2 as cv
 import numpy as np
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 from nptyping import Array
 from scipy.optimize import least_squares
 from .points import common_image_points
@@ -11,13 +11,19 @@ from .misc import redescending_loss, global_positions, rotation_matrix_from_vect
 # ========== STANDARD CAMERA MODEL ==========
 
 
-def calibrate_camera(obj_pts: Array[np.float32, ..., 3], img_pts: Array[np.float32, ..., ..., 2],
-                     cam_res: Tuple[int, int]) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray], None]:
+def calibrate_camera(
+    obj_pts: Array[np.float32, ..., 3],
+    img_pts: Array[np.float32, ..., ..., 2],
+    cam_res: Tuple[int, int],
+    k_init: Optional[Array[np.float64, 3,
+                           3]] = None) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray], None]:
     assert len(img_pts) >= 4, 'Need at least 4 vaild frames to perform calibration.'
     obj_pts = np.repeat(obj_pts[np.newaxis, :, :], img_pts.shape[0], axis=0).reshape((img_pts.shape[0], -1, 1, 3))
     img_pts = img_pts.reshape((img_pts.shape[0], -1, 1, 2))
-    flags = cv.CALIB_RATIONAL_MODEL + cv.CALIB_FIX_PRINCIPAL_POINT + cv.CALIB_ZERO_TANGENT_DIST + cv.CALIB_FIX_K2  + cv.CALIB_FIX_K3 + cv.CALIB_FIX_K4 + cv.CALIB_FIX_K5 + cv.CALIB_FIX_K6
-    ret, k, d, r, t = cv.calibrateCamera(obj_pts, img_pts, cam_res, None, None, flags=flags)
+    flags = cv.CALIB_RATIONAL_MODEL + cv.CALIB_FIX_PRINCIPAL_POINT + cv.CALIB_ZERO_TANGENT_DIST + cv.CALIB_FIX_K2 + cv.CALIB_FIX_K3 + cv.CALIB_FIX_K4 + cv.CALIB_FIX_K5 + cv.CALIB_FIX_K6
+    if k_init is not None:
+        flags += cv.CALIB_USE_INTRINSIC_GUESS
+    ret, k, d, r, t = cv.calibrateCamera(obj_pts, img_pts, cam_res, k_init, None, flags=flags)
     if ret:
         return k, d, r, t
     return None

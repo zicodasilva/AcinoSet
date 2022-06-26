@@ -74,8 +74,8 @@ def eval_delta_acc(data: Dict, results_dir: str, show_plot=False) -> np.ndarray:
 
 def eval_meas_error(data: Dict, results_dir: str, show_plot=False) -> None:
     start_frame = data["start_frame"]
-    meas_err = data["meas_err"]
-    meas_weight = data["meas_weight"]
+    meas_err = data["meas_err"].squeeze()
+    meas_weight = data["meas_weight"].squeeze()
 
     x_axis_range = range(start_frame, start_frame + len(meas_weight))
 
@@ -95,7 +95,6 @@ def eval_meas_error(data: Dict, results_dir: str, show_plot=False) -> None:
     else:
         xy_meas_err = np.array([np.mean(meas_err[:, cam_idx], axis=2) for cam_idx in range(num_cams)])
         xy_filtered_meas_err = np.array([np.mean(weighted_meas_err[:, cam_idx], axis=2) for cam_idx in range(num_cams)])
-
     markers = misc.get_markers()
     marker_colors = cm.jet(np.linspace(0, 1, len(markers)))
     mpl.rcParams['axes.prop_cycle'] = cycler.cycler('color', marker_colors)
@@ -231,23 +230,19 @@ if __name__ == "__main__":
     delta_acc_list = []
     for fte_file in fte_files:
         assert os.path.isfile(fte_file), "fte.pickle file not found"
-        if str(args.type) == "both" or str(args.type).lower() in fte_file.lower():
-            print(f"{fte_file}", end=" ")
-            data = data_ops.load_pickle(fte_file)
+        print(f"{fte_file}", end=" ")
+        data = data_ops.load_pickle(fte_file)
 
-            eval_dir = os.path.join(os.path.dirname(fte_file), "evaluation")
-            os.makedirs(eval_dir, exist_ok=True)
+        eval_dir = os.path.join(os.path.dirname(fte_file), "evaluation")
+        os.makedirs(eval_dir, exist_ok=True)
 
-            # try:
-            max_delta_acc = eval_delta_acc(data, eval_dir)
-            eval_model_error(data, eval_dir)
-            eval_meas_error(data, eval_dir)
+        # try:
+        max_delta_acc = eval_delta_acc(data, eval_dir)
+        eval_model_error(data, eval_dir)
+        eval_meas_error(data, eval_dir)
 
-            delta_acc_list.append(max_delta_acc)
-            print("...done")
-            # except:
-            #     print("")
-            #     print(f"Error: File did not have required data to process evaluation")
+        delta_acc_list.append(max_delta_acc)
+        print("...done")
 
     # Calculate the average of the maximum acceleration differences i.e. max acc between time frames.
     delta_acc_list = np.array(delta_acc_list)
