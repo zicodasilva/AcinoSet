@@ -373,7 +373,7 @@ def plot_cheetah(root_dir: str,
                  plot_reprojections=False,
                  centered=False):
     fte_file = os.path.join(root_dir, data_dir, fte_type, "fte.pickle")
-    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir), "4_cam_scene.json")
+    *_, scene_fpath = utils.find_scene_file(os.path.join(root_dir, data_dir))
     if out_dir_prefix is not None:
         fte_file = os.path.join(out_dir_prefix, data_dir, fte_type, "fte.pickle")
     app.plot_cheetah_reconstruction(fte_file,
@@ -1035,7 +1035,7 @@ def run(
         opt.options['print_level'] = 5
         opt.options['max_iter'] = 1000
         opt.options['max_cpu_time'] = 10000
-        opt.options['Tol'] = 1e-1
+        opt.options['Tol'] = 1e-3
         opt.options['OF_print_timing_statistics'] = 'yes'
         opt.options['OF_print_frequency_time'] = 10
         opt.options['OF_hessian_approximation'] = 'limited-memory'
